@@ -156,7 +156,6 @@ For Windows users, the local server runs through Windows Subsystem for Linux (WS
 
 ## Screenshots
 
-*(Make sure to update these links with your new repository URL)*
 
 ![Screenshot 1](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension1.jpg)
 
