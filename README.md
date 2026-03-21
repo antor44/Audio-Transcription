@@ -117,11 +117,13 @@ Before using the extension, ensure the local WhisperLive server is running.
 
 Change to the directory:
 ```sh
-cd Audio-Transcription-Chrome
+cd Audio-Transcription
 ```
 
 Run the server script (optionally accepts some arguments):
 ```sh
+# If you get a permission error, make the script executable first:
+# chmod +x WhisperLive_server.sh
 ./WhisperLive_server.sh
 ```
 
