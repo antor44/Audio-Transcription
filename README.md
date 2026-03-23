@@ -1,5 +1,7 @@
 # Audio Transcription for Chrome/Chromium/Microsoft Edge (v2.8.4)
 
+A browser extension (Chrome/Chromium/Edge) that captures tab audio and transcribes it in real-time using a local WhisperLive server, a highly optimized implementation of OpenAI's Whisper. Features include live translation and real-time Text-to-Speech (TTS) playback of transcribed or translated text. Compatible with Linux, Windows, macOS.
+
 ## Using the Extension
 
 ### 1. Prepare the Server
@@ -104,7 +106,7 @@ source ~/python-environments/whisper-live/bin/activate
 ```sh
 pip3 install whisper-live
 ```
-*(Or install manually by cloning the[WhisperLive GitHub repository](https://github.com/collabora/WhisperLive) and running `pip3 install .`)*. This may take several minutes.
+*(Or install manually by cloning the [WhisperLive GitHub repository](https://github.com/collabora/WhisperLive) and running `pip3 install .`)*. This may take several minutes.
 
 **Download this extension repository:**
 ```sh
@@ -139,12 +141,20 @@ source ~/python-environments/whisper-live/bin/activate && ./WhisperLive_server.s
 
 ## Installing the Extension in your Browser
 
+### Option 1: Chrome Web Store (Recommended)
+The easiest way to install the extension is directly from the official Chrome Web Store. Click the link below to add it to your browser (Compatible with Google Chrome, Chromium, and Microsoft Edge):
+
+👉 **[Install Audio Transcription from the Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh)**
+
+### Option 2: Manual Installation (Developer Mode)
+If you prefer to install it manually from the source code or want to modify the extension:
+
 1. Open Google Chrome, Chromium, or Microsoft Edge.
 2. In the address bar, type `chrome://extensions` and press Enter.
-3. Enable **Developer mode** (toggle switch in the top right corner). Recent versions of Chrome require this switch enabled for extensions not signed by Google.
+3. Enable **Developer mode** (toggle switch in the top right corner). 
 4. Click the **Load unpacked** button.
-5. Browse to the folder where you cloned this repository and select the `Audio-Transcription-Chrome` folder.
-6. The extension should now appear on the extensions page.
+5. Browse to the folder where you cloned this repository and select the `Audio-Transcription` folder.
+6. The extension should now appear on your extensions page.
 
 ## Windows Installation (WSL2)
 
@@ -345,7 +355,7 @@ trtllm-build \
 
 exit
 ```
-Then restart the server normally with `./WhisperLive_server.sh docker trt`.
+Then restart the server normally with `./WhisperLive_server.sh docker trt --model large-v2 --multilingual`.
 
 **Note on `--beam-size`:** the `--beam-size` option in `run_server.py` has **no effect** on the TensorRT backend. Beam width is fixed at engine compile time via `--max_beam_width`. Using `1` enables greedy decoding — for live transcription with Whisper large-v2 the accuracy difference versus beam search is negligible, while latency and VRAM usage are lower.
 
@@ -399,4 +409,3 @@ Current and planned approaches include:
 - **Improving Text Formatting and Post-Processing (partially implemented and currently used together with the transcription dynamics approach)**  
   Basic formatting rules could be applied, such as inserting line breaks or punctuation based on simple patterns.  
   A lightweight post-processing stage could also help correct common transcription artifacts. Heuristic rules may improve local coherence by detecting repeated or inconsistent word sequences and adjusting them using nearby context, provided the processing remains efficient enough for real-time operation.
-  
