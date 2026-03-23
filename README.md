@@ -165,7 +165,7 @@ For Windows users, the local server runs through Windows Subsystem for Linux (WS
    sudo apt-get install portaudio19-dev python3-all-dev
    ```
 2. Install WhisperLive and run `./WhisperLive_server.sh` within your Linux environment.
-3. Use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by copying or downloading this repository (or just the extension directory) to a Windows folder and loading it via the **Load unpacked** option.
+3. Use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
 
 ---
 
