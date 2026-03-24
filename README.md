@@ -158,7 +158,7 @@ brew install python3
    >   ```bash
    >   ./WhisperLive_server.sh cpu
    >   ```
-   >   Transcription works fully but is slower. Recommended: `--model small` or `--model medium`.
+   >   Transcription works fully but is slower. If your CPU is not powerful, it is recommended to use, at most, the small or medium model, especially when using WSL, as some performance is lost due to virtualization.
    >
    > - **Maximum performance — NVIDIA GPU only (CUDA mode):**
    >   Install CUDA 12 and cuBLAS 12 for your system:
