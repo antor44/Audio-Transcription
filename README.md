@@ -89,6 +89,8 @@ The easiest way to install the extension is directly from the official Chrome We
 
 👉 **[Install Audio Transcription from the Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh)**
 
+> **Note about Chrome installation:** Because this is a newly published extension, Google Chrome's "Enhanced Safe Browsing" might show a warning that it does not trust the extension yet. This is a standard automatic warning from Google and will disappear automatically after a few months of a clean track record. The extension is completely safe, open-source, and all audio is processed locally on your machine, even the translation if you want.
+
 ### Option 2: Manual Installation (Developer Mode)
 If you prefer to install it manually from the source code or want to modify the extension:
 
