@@ -7,6 +7,7 @@
 #
 # Modes:
 #   (none)              Local faster-whisper, no Docker
+#   cpu                 Local mode: force CPU backend for faster-whisper (no CUDA)
 #   docker              Docker — auto-detect hardware
 #   docker cpu          Docker — force CPU
 #   docker cuda         Docker — force NVIDIA CUDA
@@ -24,6 +25,7 @@
 #
 # Examples:
 #   ./WhisperLive_server.sh
+#   ./WhisperLive_server.sh cpu 
 #   ./WhisperLive_server.sh docker
 #   ./WhisperLive_server.sh docker cuda --model large-v3
 #   ./WhisperLive_server.sh docker cuda --model large-v3 --host 0.0.0.0
@@ -111,7 +113,7 @@ CONTAINER_NAME="whisperlive"
 # Argument parsing
 # ---------------------------------------------------------------------------
 show_help() {
-    grep '^#' "$0" | head -48 | tail -n +2 | sed 's/^# \{0,3\}//'
+    grep '^#' "$0" | head -50 | tail -n +2 | sed 's/^# \{0,3\}//'
     exit 0
 }
 
@@ -121,10 +123,19 @@ done
 
 MODE="local"
 BACKEND="auto"
+FORCE_CPU=0
 TRT_MULTILINGUAL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        cpu)            # NEW option: force CPU mode
+            if [ "$MODE" = "local" ]; then
+                FORCE_CPU=1
+            else
+                log_error "Option 'cpu' only makes sense in local mode."
+                exit 1
+            fi
+            shift ;;
         docker)
             MODE="docker"
             if [[ "${2:-}" != --* ]] && [[ -n "${2:-}" ]]; then
@@ -347,17 +358,28 @@ if [ "$MODE" = "docker" ]; then
 # =============================================================================
 else
     log_sep
-    log_server "WhisperLive — local server (faster-whisper)"
-    log_info   "Host: ${HOST} | Port: ${PORT}"
-    log_sep
-    echo -e "Press ${BOLD}Ctrl+C${R} to stop"
+    if [ "$FORCE_CPU" = "1" ]; then
+        # In CPU mode, use half the available cores (min 2, max 8)
+        CPU_THREADS="$(( $(nproc) / 2 < 2 ? 2 : $(nproc) / 2 > 8 ? 8 : $(nproc) / 2 ))"
+        log_server "WhisperLive — local server (faster-whisper)  [CPU ONLY]"
+        export CUDA_VISIBLE_DEVICES=""
+        python3 run_server.py \
+            --host            "$HOST" \
+            --port            "$PORT" \
+            --backend         faster_whisper \
+            --device          cpu \
+            --max_clients     "$MAX_CLIENTS" \
+            --max_connection_time "$MAX_CONNECTION_TIME" \
+            --omp_num_threads "$CPU_THREADS"
+    else
+        log_server "WhisperLive — local server (faster-whisper)"
+        python3 run_server.py \
+            --host            "$HOST" \
+            --port            "$PORT" \
+            --backend         faster_whisper \
+            --max_clients     "$MAX_CLIENTS" \
+            --max_connection_time "$MAX_CONNECTION_TIME" \
+            --omp_num_threads "$OMP_THREADS"
+    fi
     echo ""
-
-    python3 run_server.py \
-        --host            "$HOST" \
-        --port            "$PORT" \
-        --backend         faster_whisper \
-        --max_clients     "$MAX_CLIENTS" \
-        --max_connection_time "$MAX_CONNECTION_TIME" \
-        --omp_num_threads "$OMP_THREADS"
 fi

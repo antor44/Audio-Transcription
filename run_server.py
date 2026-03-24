@@ -116,7 +116,7 @@ logger = logging.getLogger(__name__)
 
 def signal_handler(sig, frame):
     logger.info("Received interrupt signal. Shutting down gracefully…")
-    sys.exit(0)
+    os._exit(0)
 
 
 # =============================================================================
@@ -238,6 +238,13 @@ def main():
         help="Transcription backend (default: faster_whisper).",
     )
 
+    # -- Device ---------------------------------------------------------------
+    parser.add_argument(
+        "--device", type=str, default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Device for faster-whisper backend (default: auto). Use 'cpu' to force CPU mode.",
+    )
+
     # -- Model paths ----------------------------------------------------------
     parser.add_argument(
         "--faster_whisper_custom_model_path", "-fw",
@@ -354,6 +361,12 @@ def main():
         sys.exit(1)
 
     server = TranscriptionServer()
+
+    if args.backend == "faster_whisper":
+        if args.device == "cpu" or os.environ.get("CUDA_VISIBLE_DEVICES") == "":
+            logger.info("Using Device=cpu with precision float32")
+        else:
+            logger.info("Using Device=cuda with precision float16")
 
     logger.info(
         "Server ready → host=%s  port=%d  backend=%s  "
