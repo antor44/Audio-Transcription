@@ -109,7 +109,7 @@ Depending on your operating system configuration, you may need to create a Pytho
 
 For Windows users, the local server runs through Windows Subsystem for Linux (WSL2), which is the default virtual system on Windows 10/11 for running native Linux software.
 
-0. If you didn't install WSL2 then open PowerShell or Windows Command Prompt in administrator mode:
+First, if you didn't install WSL2 then open PowerShell or Windows Command Prompt in administrator mode:
 ```bash
 wsl --install
 ```
@@ -136,11 +136,15 @@ sudo apt upgrade
 
 **For Ubuntu/Debian:**
 ```sh
-sudo apt install virtualenv
+sudo apt install virtualenv python3 python3-pip
 ```
 **For macOS:**
+
+First, if you didn't install Homebrew then visit [brew.sh](https://brew.sh/) and follow the installation instructions.
+
 ```sh
 brew install virtualenv
+brew install python3
 ```
 
 **Then set up the environment:**
