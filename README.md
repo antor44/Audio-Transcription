@@ -82,9 +82,57 @@ Click **Stop Capture** to end the session.
 
 ---
 
+## Installing the Extension in your Browser
+
+### Option 1: Chrome Web Store (Recommended)
+The easiest way to install the extension is directly from the official Chrome Web Store. Click the link below to add it to your browser (Compatible with Google Chrome, Chromium, and Microsoft Edge):
+
+👉 **[Install Audio Transcription from the Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh)**
+
+### Option 2: Manual Installation (Developer Mode)
+If you prefer to install it manually from the source code or want to modify the extension:
+
+1. Open Google Chrome, Chromium, or Microsoft Edge.
+2. In the address bar, type `chrome://extensions` and press Enter.
+3. Enable **Developer mode** (toggle switch in the top right corner). 
+4. Click the **Load unpacked** button.
+5. Browse to the folder where you cloned this repository and select the `Audio-Transcription` folder.
+6. The extension should now appear on your extensions page.
+
+---
+
 ## Installing the WhisperLive Server
 
 Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or `virtualenv`. You must activate this environment to run the WhisperLive server.
+
+**Windows Installation (WSL2):**
+
+For Windows users, the local server runs through Windows Subsystem for Linux (WSL2), which is the default virtual system on Windows 10/11 for running native Linux software.
+
+0. If you didn't install WSL2 then open PowerShell or Windows Command Prompt in administrator mode:
+```bash
+wsl --install
+```
+This command will enable the features necessary to run WSL and install the Ubuntu distribution. Once this is done, you will need to restart.
+
+If Ubuntu (or whatever recent Linux distribution among available ones) didn't install, then:
+```bash
+wsl.exe --install Ubuntu-24.04
+```
+Open the **Linux terminal** (not Windows), update the packages:
+```bash
+sudo apt update
+sudo apt upgrade
+```
+
+1. Install PortAudio inside WSL2:
+   ```sh
+   sudo apt-get install portaudio19-dev python3-all-dev
+   ```
+
+2. Install WhisperLive and run the server WhisperLive_server.sh within your Linux environment as indicated in the rest of the Ubuntu/Debian instructions.
+
+3. Use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
 
 **For Ubuntu/Debian:**
 ```sh
@@ -100,6 +148,11 @@ brew install virtualenv
 mkdir ~/python-environments
 virtualenv ~/python-environments/whisper-live
 source ~/python-environments/whisper-live/bin/activate
+```
+
+**Install required dependencies:**
+```sh
+pip install fastapi uvicorn
 ```
 
 **Install WhisperLive (at least version 0.6.3):**
@@ -138,34 +191,6 @@ source ~/python-environments/whisper-live/bin/activate && ./WhisperLive_server.s
 
 > [!TIP]
 > You can edit the **`WhisperLive_server.sh`** bash script to optionally add the environment activation command. For example, add it at the beginning, just below the line `#!/bin/bash`: `source ~/python-environments/whisper-live/bin/activate`.
-
-## Installing the Extension in your Browser
-
-### Option 1: Chrome Web Store (Recommended)
-The easiest way to install the extension is directly from the official Chrome Web Store. Click the link below to add it to your browser (Compatible with Google Chrome, Chromium, and Microsoft Edge):
-
-👉 **[Install Audio Transcription from the Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh)**
-
-### Option 2: Manual Installation (Developer Mode)
-If you prefer to install it manually from the source code or want to modify the extension:
-
-1. Open Google Chrome, Chromium, or Microsoft Edge.
-2. In the address bar, type `chrome://extensions` and press Enter.
-3. Enable **Developer mode** (toggle switch in the top right corner). 
-4. Click the **Load unpacked** button.
-5. Browse to the folder where you cloned this repository and select the `Audio-Transcription` folder.
-6. The extension should now appear on your extensions page.
-
-## Windows Installation (WSL2)
-
-For Windows users, the local server runs through Windows Subsystem for Linux (WSL2):
-
-1. Install PortAudio inside WSL2:
-   ```sh
-   sudo apt-get install portaudio19-dev python3-all-dev
-   ```
-2. Install WhisperLive and run `./WhisperLive_server.sh` within your Linux environment.
-3. Use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
 
 ---
 
