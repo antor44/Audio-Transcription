@@ -146,27 +146,27 @@ brew install python3
 ```
 
    > **⚠️ GPU vs CPU mode (WSL2 and Linux)**
-   > By default the server uses CUDA (NVIDIA GPU) for maximum performance.
-   > This requires **CUDA 12** and **cuBLAS 12** installed on your system.
-   > If you see this error:
+   > By default the server uses CUDA for maximum performance.
+   > **CUDA only works with NVIDIA GPUs.** If you have an AMD or Intel GPU,
+   > or if you see this error:
    > `Library libcublas.so.12 is not found or cannot be loaded`
    > you have two options:
    >
-   > - **Quick setup (CPU mode)** — no NVIDIA drivers or CUDA needed:
+   > - **Quick setup — no GPU required (CPU mode):**
    >   ```bash
    >   ./WhisperLive_server.sh cpu
    >   ```
    >   Transcription works fully but is slower. Recommended: `--model small` or `--model medium`.
    >
-   > - **Maximum performance (GPU mode)** — install CUDA 12 for your system:
-   >   - WSL2: follow the [NVIDIA CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)
-   >   - Native Linux: follow the [NVIDIA CUDA Linux guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
+   > - **Maximum performance — NVIDIA GPU only (CUDA mode):**
+   >   Install CUDA 12 and cuBLAS 12 for your system:
+   >   - WSL2: [NVIDIA CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)
+   >   - Native Linux: [NVIDIA CUDA Linux guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
    >
    >   Then run the server normally:
    >   ```bash
    >   ./WhisperLive_server.sh
    >   ```
-
 
 **Then set up the environment:**
 ```sh
