@@ -125,14 +125,12 @@ sudo apt update
 sudo apt upgrade
 ```
 
-1. Install PortAudio inside WSL2:
+Install PortAudio and other dependencies inside WSL2:
    ```sh
-   sudo apt-get install portaudio19-dev python3-all-dev
+   sudo apt-get install portaudio19-dev python3-all-dev virtualenv python3 python3-pip
    ```
-
-2. Install WhisperLive and run the server WhisperLive_server.sh within your Linux environment as indicated in the rest of the Ubuntu/Debian instructions.
-
-3. Use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
+> [!NOTE]
+> Install WhisperLive and run the server WhisperLive_server.sh within your Linux environment as indicated in the rest of the instructions. However, you can use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
 
 **For Ubuntu/Debian:**
 ```sh
@@ -146,6 +144,29 @@ First, if you didn't install Homebrew then visit [brew.sh](https://brew.sh/) and
 brew install virtualenv
 brew install python3
 ```
+
+   > **⚠️ GPU vs CPU mode (WSL2 and Linux)**
+   > By default the server uses CUDA (NVIDIA GPU) for maximum performance.
+   > This requires **CUDA 12** and **cuBLAS 12** installed on your system.
+   > If you see this error:
+   > `Library libcublas.so.12 is not found or cannot be loaded`
+   > you have two options:
+   >
+   > - **Quick setup (CPU mode)** — no NVIDIA drivers or CUDA needed:
+   >   ```bash
+   >   ./WhisperLive_server.sh cpu
+   >   ```
+   >   Transcription works fully but is slower. Recommended: `--model small` or `--model medium`.
+   >
+   > - **Maximum performance (GPU mode)** — install CUDA 12 for your system:
+   >   - WSL2: follow the [NVIDIA CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)
+   >   - Native Linux: follow the [NVIDIA CUDA Linux guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
+   >
+   >   Then run the server normally:
+   >   ```bash
+   >   ./WhisperLive_server.sh
+   >   ```
+
 
 **Then set up the environment:**
 ```sh
