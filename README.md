@@ -28,7 +28,7 @@ The UI is divided into several sections to give you full control over transcript
 >   - *Microsoft Edge* uses Microsoft's online Neural TTS voices (high quality, broad language support, requires internet).
 >   - *Chromium* has no built-in engine. It will only work if a TTS engine extension (like Piper) is installed; otherwise, no audio will be produced.
 
-- **Show in Standalone Window:** Choose between displaying the text in a floating overlay inside the webpage, or in a dedicated, resizable standalone popup window.
+- **Show in Standalone Window:** Choose whether to display the text in a floating overlay within the webpage or in a dedicated, resizable standalone popup window. The standalone mode supports additional online services, such as video conferences, audio podcasts, or even local video and audio files played directly in the browser (only for files with audio and video codecs supported by the browser).
 - **Voice Activity Detection (VAD):** Enable this to stop processing audio during silent periods, saving CPU/GPU resources.
 
 #### WhisperLive Server
