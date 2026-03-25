@@ -107,11 +107,13 @@ If you prefer to install it manually from the source code or want to modify the 
 
 Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or `virtualenv`. You must activate this environment to run the WhisperLive server.
 
-**Windows Installation (WSL2):**
+---
+
+### Windows Installation (WSL2)
 
 For Windows users, the local server runs through Windows Subsystem for Linux (WSL2), which is the default virtual system on Windows 10/11 for running native Linux software.
 
-First, if you didn't install WSL2 then open PowerShell or Windows Command Prompt in administrator mode:
+First, if you didn't install WSL2, open PowerShell or Windows Command Prompt in administrator mode:
 ```bash
 wsl --install
 ```
@@ -121,6 +123,7 @@ If Ubuntu (or whatever recent Linux distribution among available ones) didn't in
 ```bash
 wsl.exe --install Ubuntu-24.04
 ```
+
 Open the **Linux terminal** (not Windows), update the packages:
 ```bash
 sudo apt update
@@ -128,73 +131,130 @@ sudo apt upgrade
 ```
 
 Install PortAudio and other dependencies inside WSL2:
-   ```sh
-   sudo apt-get install portaudio19-dev python3-all-dev virtualenv python3 python3-pip
-   ```
-> [!NOTE]
-> Install WhisperLive and run the server WhisperLive_server.sh within your Linux environment as indicated in the rest of the instructions. However, you can use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
+```sh
+sudo apt-get install portaudio19-dev python3-all-dev virtualenv python3 python3-pip
+```
 
-**For Ubuntu/Debian:**
+> [!NOTE]
+> Install WhisperLive and run the server `WhisperLive_server.sh` within your Linux environment as indicated in the rest of the instructions. However, you can use the extension in the Windows version of Chrome/Chromium/Microsoft Edge by installing it directly from the official [Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh), or by downloading this repository to a Windows folder and loading it via the **Load unpacked** option.
+
+---
+
+### For Ubuntu/Debian
 ```sh
 sudo apt install virtualenv python3 python3-pip
 ```
-**For macOS:**
 
-First, if you didn't install Homebrew then visit [brew.sh](https://brew.sh/) and follow the installation instructions.
+### For macOS
+
+First, if you didn't install Homebrew, visit [brew.sh](https://brew.sh/) and follow the installation instructions.
 
 ```sh
 brew install virtualenv
 brew install python3
 ```
 
-   > **⚠️ GPU vs CPU mode (WSL2 and Linux)**
-   > 
-   > By default the server uses CUDA for maximum performance
-   > **(CUDA only works with NVIDIA GPUs).**
-   > If after installation you see this error when launching the server:
-   > `Library libcublas.so.12 is not found or cannot be loaded`
-   > you have two options:
-   >
-   > - **Quick setup — no GPU required (CPU mode):**
-   >   ```bash
-   >   ./WhisperLive_server.sh cpu
-   >   ```
-   >   Transcription works fully but is slower. If your CPU is not powerful, it is recommended to use, at most, the small or medium model, especially when using WSL, as some performance is lost due to virtualization.
-   >
-   > - **Maximum performance — NVIDIA GPU only (CUDA mode):**
-   >   Install CUDA 12 and cuBLAS 12 for your system:
-   >   - WSL2: [NVIDIA CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)
-   >   - Native Linux: [NVIDIA CUDA Linux guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
-   >
-   >   Then run the server normally:
-   >   ```bash
-   >   ./WhisperLive_server.sh
-   >   ```
+---
 
-**Then set up the environment:**
+> **⚠️ GPU vs CPU mode (WSL2 and Linux)**
+>
+> By default the server uses CUDA for maximum performance **(CUDA only works with NVIDIA GPUs).**
+> If after installation you see this error when launching the server:
+> `Library libcublas.so.12 is not found or cannot be loaded`
+> you have two options:
+>
+> **Quick setup — no GPU required (CPU mode):**
+> ```bash
+> ./WhisperLive_server.sh cpu
+> ```
+> Transcription works fully but is slower. If your CPU is not powerful, it is recommended to use at most the `small` or `medium` model, especially when using WSL, as some performance is lost due to virtualization.
+>
+> **Maximum performance — NVIDIA GPU only (CUDA mode):**
+> Install CUDA 12 and cuBLAS 12 inside WSL2 following the steps below, then run the server normally:
+> ```bash
+> ./WhisperLive_server.sh
+> ```
+
+---
+
+### Installing CUDA 12 + cuBLAS 12 in WSL2 (NVIDIA GPU only)
+
+This section only applies if you have an NVIDIA GPU and want hardware-accelerated transcription.
+
+#### Step 1 — Verify your NVIDIA driver in Windows
+
+Open a **Windows** Command Prompt (not WSL) and run:
+```cmd
+nvidia-smi
+```
+The top-right corner must show `CUDA Version: 12.x` or higher. If the command is not found, download and install the latest NVIDIA driver from [nvidia.com/drivers](https://www.nvidia.com/drivers) and restart Windows before continuing.
+
+#### Step 2 — Add the NVIDIA CUDA repository inside WSL
+
+Open your **WSL/Ubuntu terminal** and run:
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+```
+
+#### Step 3 — Install cuBLAS 12
+
+```bash
+sudo apt-get install -y libcublas-12-4 libcublas-dev-12-4
+```
+
+> [!NOTE]
+> Do **not** install the full `cuda-toolkit-12-4` meta-package on Ubuntu 24.04 (Noble). It pulls in `nsight-systems` which depends on `libtinfo5`, a library that does not exist in Noble. Installing only `libcublas` is sufficient for WhisperLive.
+
+#### Step 4 — Set environment variables
+
+```bash
+echo 'export PATH=/usr/local/cuda-12.4/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### Step 5 — Verify the installation
+
+```bash
+ldconfig -p | grep libcublas
+```
+
+You should see at least one line containing `libcublas.so.12`. If so, CUDA is ready and you can run the server normally with:
+```bash
+./WhisperLive_server.sh
+```
+
+---
+
+### Setting up the Python environment
+
 ```sh
 mkdir ~/python-environments
 virtualenv ~/python-environments/whisper-live
 source ~/python-environments/whisper-live/bin/activate
 ```
 
-**Install required dependencies:**
+Install required dependencies:
 ```sh
 pip install fastapi uvicorn
 ```
 
-**Install WhisperLive (at least version 0.6.3):**
+Install WhisperLive (at least version 0.6.3):
 ```sh
 pip3 install whisper-live
 ```
-*(Or install manually by cloning the [WhisperLive GitHub repository](https://github.com/collabora/WhisperLive) and running `pip3 install .`)*. This may take several minutes.
+*(Or install manually by cloning the [WhisperLive GitHub repository](https://github.com/collabora/WhisperLive) and running `pip3 install .`). This may take several minutes.*
 
-**Download this extension repository:**
+Download this extension repository:
 ```sh
 git clone https://github.com/antor44/Audio-Transcription.git
 ```
 
-## Running the WhisperLive Server
+---
+
+### Running the WhisperLive Server
 
 Before using the extension, ensure the local WhisperLive server is running.
 
@@ -203,22 +263,67 @@ Change to the directory:
 cd Audio-Transcription
 ```
 
-Run the server script (optionally accepts some arguments):
+Run the server script:
 ```sh
-# If you get a permission error, make the script executable first:
-# chmod +x WhisperLive_server.sh
 ./WhisperLive_server.sh
 ```
 
-Or, if using a Python virtual environment:
-```sh
-source ~/python-environments/whisper-live/bin/activate && ./WhisperLive_server.sh
-```
+*(If a permission error occurs, make the script executable first: `chmod +x WhisperLive_server.sh`)*
 
 *(If a "numpy version 2" error occurs: `pip3 install "numpy<2"`)*
 
-> [!TIP]
+ [!TIP]
 > You can edit the **`WhisperLive_server.sh`** bash script to optionally add the environment activation command. For example, add it at the beginning, just below the line `#!/bin/bash`: `source ~/python-environments/whisper-live/bin/activate`.
+---
+
+### Windows Desktop Shortcut (WSL2)
+
+You can launch the server with a double-click from Windows by creating a shortcut.
+
+**Basic — if your environment is already configured in your shell profile:**
+```
+C:\Windows\System32\wsl.exe -d Ubuntu-24.04 --cd ~ bash --login -c "cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
+```
+
+**With explicit environment activation — recommended if you use a virtualenv or Conda environment:**
+```
+C:\Windows\System32\wsl.exe -d Ubuntu-24.04 --cd ~ bash --login -c "source ~/python-environments/whisper-live/bin/activate && cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
+```
+Replace `~/python-environments/whisper-live/bin/activate` with your own path if needed. For a Conda environment, use `conda activate whisper-live` instead of `source ...`.
+
+> [!IMPORTANT]
+> The `--login` flag is required. Without it, the shell launched by Windows does not load the user environment (PATH, CUDA variables, etc.), and the server will fail to start.
+> The `--cd ~` flag sets the starting directory to the Linux home folder — Windows shortcut targets cannot use Linux paths directly.
+> If your WSL distribution has a different name, replace `Ubuntu-24.04` with the name shown by running `wsl --list` in a Windows terminal.
+
+**To create the shortcut:**
+1. Right-click on the Desktop → **New → Shortcut**
+2. Paste the command above as the target
+3. Give it a name (e.g. *WhisperLive Server*)
+4. Click **Finish**
+
+---
+
+### Troubleshooting: Extension Not Connecting After WSL Restart
+
+**Symptom:** The server starts correctly and shows no errors, but the Chrome extension cannot connect — even though it worked previously.
+
+**Cause:** WSL2 uses a loopback proxy to forward `localhost` connections from Windows into the Linux environment. When WSL is shut down with `wsl --shutdown` (or after `wsl --update`), this proxy can be left in an inconsistent state. At the same time, Chrome caches the previous failed WebSocket connection and does not automatically retry with a clean state.
+
+**Fix — two steps, in this order:**
+
+1. **Restart WSL** (if not already running fresh):
+   ```powershell
+   wsl --shutdown
+   # Wait 5 seconds, then reopen your WSL terminal
+   ```
+
+2. **Restart Chrome completely** — close all Chrome windows, wait a few seconds, then reopen it. Simply reloading the extension page is not enough; Chrome must fully restart to clear the cached WebSocket state.
+
+After restarting both, launch the server and the extension should connect immediately.
+
+> [!NOTE]
+> The warnings `wsl: Failed to translate 'C:\...'` that appear when WSL starts are harmless. They occur because WSL cannot resolve certain Windows paths that contain spaces or special characters when appending the Windows PATH to the Linux environment. They do not affect the server or the extension.
 
 ---
 
