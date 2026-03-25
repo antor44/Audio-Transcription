@@ -1,6 +1,6 @@
 # Audio Transcription for Chrome/Chromium/Microsoft Edge (v2.8.4)
 
-A browser extension (Chrome/Chromium/Edge) that captures tab audio and transcribes it in real-time using a local WhisperLive server, a highly optimized implementation of OpenAI's Whisper. Features include live translation and real-time Text-to-Speech (TTS) playback of transcribed or translated text. Compatible with Linux, Windows, macOS.
+A browser extension (Chrome/Chromium/Edge) that captures tab audio and transcribes it in real-time using a local WhisperLive server, a highly optimized implementation of OpenAI's Whisper. Compatible with Linux, Windows, and macOS, this extension acts as a true **Live Interpreter**. It features live translation and Text-to-Speech (TTS) playback of the transcribed or translated text on the fly. It works with any audio or video stream, completely independent of whether the source has pre-existing subtitles.
 
 ## Using the Extension
 
