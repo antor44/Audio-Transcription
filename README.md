@@ -272,7 +272,7 @@ Run the server script:
 
 *(If a "numpy version 2" error occurs: `pip3 install "numpy<2"`)*
 
- [!TIP]
+> [!TIP]
 > You can edit the **`WhisperLive_server.sh`** bash script to optionally add the environment activation command. For example, add it at the beginning, just below the line `#!/bin/bash`: `source ~/python-environments/whisper-live/bin/activate`.
 ---
 
