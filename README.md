@@ -148,9 +148,10 @@ brew install python3
 ```
 
    > **⚠️ GPU vs CPU mode (WSL2 and Linux)**
-   > By default the server uses CUDA for maximum performance.
-   > **CUDA only works with NVIDIA GPUs.** If you have an AMD or Intel GPU,
-   > or if you see this error:
+   > 
+   > By default the server uses CUDA for maximum performance
+   > **(CUDA only works with NVIDIA GPUs).**
+   > If after installation you see this error when launching the server:
    > `Library libcublas.so.12 is not found or cannot be loaded`
    > you have two options:
    >
