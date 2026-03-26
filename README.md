@@ -304,26 +304,17 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 
 ---
 
-### Troubleshooting: Extension Not Connecting After WSL Restart
+## Troubleshooting: Extension Not Connecting
 
-**Symptom:** The server starts correctly and shows no errors, but the Chrome extension cannot connect — even though it worked previously.
+**Symptom:** The server starts correctly and shows no errors, but the Chrome extension cannot connect.
 
-**Cause:** WSL2 uses a loopback proxy to forward `localhost` connections from Windows into the Linux environment. When WSL is shut down with `wsl --shutdown` (or after `wsl --update`), this proxy can be left in an inconsistent state. At the same time, Chrome caches the previous failed WebSocket connection and does not automatically retry with a clean state.
+**Things to check:**
 
-**Fix — two steps, in this order:**
-
-1. **Restart WSL** (if not already running fresh):
-   ```powershell
-   wsl --shutdown
-   # Wait 5 seconds, then reopen your WSL terminal
-   ```
-
-2. **Restart Chrome completely** — close all Chrome windows, wait a few seconds, then reopen it. Simply reloading the extension page is not enough; Chrome must fully restart to clear the cached WebSocket state.
-
-After restarting both, launch the server and the extension should connect immediately.
-
-> [!NOTE]
-> The warnings `wsl: Failed to translate 'C:\...'` that appear when WSL starts are harmless. They occur because WSL cannot resolve certain Windows paths that contain spaces or special characters when appending the Windows PATH to the Linux environment. They do not affect the server or the extension.
+- **Port and host:** Make sure the extension is configured with the same port the server is using (default: `9090`) and that the host is `localhost` or `127.0.0.1`.
+- **Server not running:** Verify the server is actually listening by running this command in the **WSL/Linux terminal**: `ss -tlnp | grep 9090`. If nothing appears, the server is not running.
+- **Windows network settings changed:** A VPN, firewall rule, or Windows Update can block or reroute the connection. Check that nothing is blocking port `9090`.
+- **Chrome cached a failed connection:** Restart Chrome completely — close all windows, wait a few seconds, then reopen. Simply reloading the extension page is not enough.
+- **Incompatible page or context:** Some pages or configurations may not be compatible with the extension, such as multimedia player extensions that run in a separate window or as a standalone app.
 
 ---
 
@@ -334,6 +325,10 @@ After restarting both, launch the server and the extension should connect immedi
 ![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension2.jpg)
 
 ![Screenshot 3](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension3.jpg)
+
+![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension4.jpg)
+
+![Screenshot 3](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension5.jpg)
 
 ---
 
