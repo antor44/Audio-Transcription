@@ -128,6 +128,53 @@ if (window.__audioTranscriptionOverlayApi) {
     }
     const debouncedSaveWindowStyle = debounce(saveWindowStyle, 200);
 
+    // ---------------------------------------------------------------------------
+    // Script-aware utilities
+    // ---------------------------------------------------------------------------
+    // Scripts that do not delimit words with spaces:
+    //   U+3040-9FFF  Hiragana, Katakana, CJK Unified Ideographs (Japanese/Chinese)
+    //   U+F900-FAFF  CJK Compatibility Ideographs
+    //   U+0E00-0E7F  Thai
+    //   U+1000-109F  Myanmar (Burmese)
+    //   U+1780-17FF  Khmer
+    // Korean Hangul (U+AC00-D7AF) is excluded — Korean uses spaces between words.
+    const SPACELESS_RE = /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0E7F\u1000-\u109F\u1780-\u17FF]/;
+
+    function isSpacelessScript(text) {
+      return SPACELESS_RE.test(text);
+    }
+
+    // Sentence-ending / phrase-ending punctuation for all supported scripts.
+    // Used in splitIntoFlushableChunks and queueTranslation.
+    //   ASCII              .  !  ?  … (U+2026)
+    //   CJK                。(U+3002)  ！(FF01)  ？(FF1F)  、(3001 – phrase break)
+    //   Arabic full-stop   ؟ (U+061F)
+    //   Arabic comma       ، (U+060C)  ← very common phrase separator in transcribed Arabic
+    //   Arabic semicolon   ؛ (U+061B)
+    //   Devanagari/Hindi   । (U+0964)  ॥ (U+0965)
+    //   Myanmar            ။ (U+104B)  ၊ (U+104A)
+    //   Khmer              ។ (U+17D4)
+    //   Ethiopian          ። (U+1362)
+    //   Armenian           ։ (U+0589)
+    const SENTENCE_END_CHARS =
+      ".!?\u2026\u3002\uFF01\uFF1F\u3001\u061F\u060C\u061B\u0964\u0965\u104A\u104B\u17D4\u1362\u0589";
+    const SENTENCE_END_RE = new RegExp("[" + SENTENCE_END_CHARS + "]");
+
+    // Returns a word-equivalent count for any script:
+    //   - Space-separated scripts (Latin, Arabic, Hebrew, Devanagari, Korean…):
+    //     whitespace-delimited token count — identical to the original behaviour.
+    //   - Spaceless scripts (CJK, Thai, Burmese, Khmer): each character counts as
+    //     one unit because there are no word-delimiting spaces.
+    // The character count is used only when spaceless chars dominate the text,
+    // so a Latin sentence with a few CJK chars is still counted by words.
+    function countWords(text) {
+      const t = normalizeText(text);
+      if (!t) return 0;
+      const spaceWords     = t.split(/\s+/).filter(Boolean).length;
+      const spacelessChars = (t.match(SPACELESS_RE) || []).length;
+      return spacelessChars > spaceWords ? spacelessChars : spaceWords;
+    }
+
     function calculateTextSimilarity(a, b) {
       const wa = splitWords(a);
       const wb = splitWords(b);
@@ -236,7 +283,12 @@ if (window.__audioTranscriptionOverlayApi) {
       const chunks = [];
       if (!rest) return { chunks, remainder: "" };
 
-      const sentenceRegex = /[^.!?\u2026]+[.!?\u2026]+(?:["')\]]+)?/g;
+      // Sentence boundary regex covering ASCII and all supported script punctuation.
+      const sentenceRegex = new RegExp(
+        "[^" + SENTENCE_END_CHARS + "]+" +
+        "[" + SENTENCE_END_CHARS + "]+(?:[\"')\\]]+)?",
+        "g"
+      );
       let consumedLength = 0;
       let match;
 
@@ -247,19 +299,30 @@ if (window.__audioTranscriptionOverlayApi) {
       }
 
       rest = normalizeText(rest.slice(consumedLength));
-      const words = rest.split(/\s+/).filter(Boolean);
 
-      while (words.length >= 10) {
-        const piece = normalizeText(words.splice(0, 10).join(" "));
-        if (piece) chunks.push(piece);
+      if (isSpacelessScript(rest)) {
+        // No word spaces — chunk by character count (~20 chars ≈ one short phrase).
+        const CHARS_PER_CHUNK = 20;
+        while (rest.length >= CHARS_PER_CHUNK) {
+          chunks.push(rest.slice(0, CHARS_PER_CHUNK));
+          rest = rest.slice(CHARS_PER_CHUNK).replace(/^\s+/, "");
+        }
+      } else {
+        // Space-separated scripts: chunk by word count (original behaviour).
+        const words = rest.split(/\s+/).filter(Boolean);
+        while (words.length >= 10) {
+          const piece = normalizeText(words.splice(0, 10).join(" "));
+          if (piece) chunks.push(piece);
+        }
+        rest = normalizeText(words.join(" "));
       }
 
-      if (forceFlush && words.length) {
-        chunks.push(normalizeText(words.join(" ")));
+      if (forceFlush && rest.length) {
+        chunks.push(rest);
         return { chunks, remainder: "" };
       }
 
-      return { chunks, remainder: normalizeText(words.join(" ")) };
+      return { chunks, remainder: rest };
     }
 
     function getCurrentWindowText(segArray) {
@@ -313,41 +376,85 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function queueTranslation(text) {
       if (!enableGeminiTranslation) return;
-    
+
       const cleanText = removeInternalRepetitions(normalizeText(text));
-      if (!cleanText || cleanText.split(/\s+/).length < 2) return;
-    
+      // Allow single-word items into the queue so Arabic single-word residuals
+      // (after rolling-window dedup) still contribute to the word count that
+      // triggers the translation dispatch threshold.
+      if (!cleanText) return;
+
       if (translationQueue.length === 0) {
         translationQueue.push(cleanText);
       } else {
-        const lastInQueue = translationQueue[translationQueue.length - 1];
-        const newPart = trimPrefixOverlap(lastInQueue, cleanText, 60, 3);
-        
-        if (stripPunctuation(newPart).length < stripPunctuation(cleanText).length * 0.95) {
+        const lastInQueue    = translationQueue[translationQueue.length - 1];
+        const newPart        = trimPrefixOverlap(lastInQueue, cleanText, 60, 3);
+        const newPartWords   = countWords(newPart);
+        const cleanTextWords = countWords(cleanText);
+
+        // Replace the last queue item ONLY when the incoming text is almost
+        // entirely a repeat of what is already queued (genuine rolling-window
+        // update with fewer than 2 new word-equivalents added).
+        //
+        // The previous threshold was:
+        //   stripPunctuation(newPart).length < stripPunctuation(cleanText).length * 0.95
+        // This fired on any overlap > 5% of source characters.  For Arabic
+        // rolling-window commits that share 30–60% of words with the previous
+        // commit this caused the queue to be perpetually replaced instead of
+        // accumulated, keeping the total below the 16-word fire threshold so
+        // translation never triggered.
+        if (newPartWords < 2 && newPartWords < cleanTextWords) {
           translationQueue[translationQueue.length - 1] = cleanText;
         } else {
           translationQueue.push(cleanText);
         }
       }
-    
-      const queued = translationQueue.join(" ");
-      const wordCount = queued.split(/\s+/).filter(Boolean).length;
-      const hasSentenceBoundary = /[.!?\u2026]/.test(queued);
-    
-      if (!isTranslatingLocal && (wordCount >= activeProfile.translationMinWords || (wordCount >= activeProfile.translationSentenceWords && hasSentenceBoundary))) {
+
+      const queued    = translationQueue.join(" ");
+      // countWords() so CJK character count reaches the numeric threshold.
+      const wordCount = countWords(queued);
+      // SENTENCE_END_RE covers all scripts, including Arabic ، and ؟.
+      const hasSentenceBoundary = SENTENCE_END_RE.test(queued);
+
+      if (
+        !isTranslatingLocal &&
+        (wordCount >= activeProfile.translationMinWords ||
+          (wordCount >= activeProfile.translationSentenceWords && hasSentenceBoundary))
+      ) {
         processTranslationQueue();
       }
     }
     
     function processTranslationQueue() {
       if (isTranslatingLocal || translationQueue.length === 0) return;
-      
-      const text = translationQueue.join(" ");
-      translationQueue = []; // Clear queue now
+
+      // Cap source text per API call to prevent output-token truncation.
+      // While a call is in-flight (isTranslatingLocal = true) new segments keep
+      // queuing.  Sending all accumulated items at once can produce a source text
+      // that exceeds the model output-token budget, causing silent mid-sentence
+      // truncation.  ~400 source characters → ≤ ~600 output tokens for any pair,
+      // well within maxOutputTokens: 1024.  Leftovers fire immediately after.
+      const MAX_SOURCE_CHARS = 400;
+      let text = "";
+      let consumed = 0;
+      while (consumed < translationQueue.length) {
+        const next      = translationQueue[consumed];
+        const candidate = text ? text + " " + next : next;
+        if (text && candidate.length > MAX_SOURCE_CHARS) break;
+        text = candidate;
+        consumed++;
+      }
+      translationQueue.splice(0, consumed);
       isTranslatingLocal = true;
 
-      const shownTail = translatedChunks.slice(-3).join(" ")
-        .split(/\s+/).filter(Boolean).slice(-8).join(" ");
+      // Build context tail from recent translated output.
+      // For spaceless-script output, split(/\s+/) is useless — use raw chars.
+      const recentTranslated = translatedChunks.slice(-3).join(" ");
+      let shownTail;
+      if (isSpacelessScript(recentTranslated)) {
+        shownTail = recentTranslated.replace(/\s+/g, "").slice(-20);
+      } else {
+        shownTail = recentTranslated.split(/\s+/).filter(Boolean).slice(-8).join(" ");
+      }
 
       chrome.runtime.sendMessage({ action: "processTranslation", text, shownTail }, (response) => {
         const runtimeErr = chrome.runtime.lastError?.message || "";
@@ -356,13 +463,18 @@ if (window.__audioTranscriptionOverlayApi) {
         if (!runtimeErr && response?.success) {
           if (response.data) {
             addTranslatedChunk(response.data);
+          }
+          // Show the actual Gemini API error when it fell back to Google Translate.
+          if (response.geminiError) {
+            updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
+          } else {
             updateHeaderStatusText("Translation Active");
           }
         } else {
           const errMsg = response?.error || runtimeErr || "Translation failed";
           updateHeaderStatusText(`Translation Error: ${errMsg}`);
           console.error("Translation failed:", errMsg, response || null);
-          translationQueue.unshift(text); // Re-queue text on failure
+          translationQueue.unshift(text);
         }
 
         if (translationQueue.length > 0) {
@@ -413,8 +525,11 @@ if (window.__audioTranscriptionOverlayApi) {
       const lastChunks = allHistory.slice(-6).join(" ");
       if (calculateTextSimilarity(lastChunks, deduped) > 0.80) return;
 
-      const dedupedWords = deduped.split(/\s+/).filter(Boolean);
-      if (dedupedWords.length <= 5) {
+      // countWords() for the short-text guard: for spaceless scripts (CJK, Thai…)
+      // split(/\s+/) returns the whole sentence as one token, so every chunk
+      // would pass the <= 5 test and be subjected to the aggressive includes()
+      // check, silently dropping valid new source text.
+      if (countWords(deduped) <= 5) {
         const dedupedStripped = stripPunctuation(deduped);
         const recentHistoryStripped = stripPunctuation(allHistory.slice(-50).join(" "));
         if (dedupedStripped && recentHistoryStripped.includes(dedupedStripped)) return;
@@ -470,9 +585,11 @@ if (window.__audioTranscriptionOverlayApi) {
 
       const P = activeProfile;
       const currentWindowText = getCurrentWindowText(newSegments);
-      const wordCount = splitWords(currentWindowText).length;
-      const elapsed = Date.now() - windowStartTime;
-      const isStable = wordCount >= P.stableWordCount || elapsed >= P.stableElapsed || newSegments.length >= P.stableSegments;
+      // countWords() uses character count for spaceless scripts so stableWordCount
+      // is reachable even when there are no word-delimiting spaces.
+      const wordCount = countWords(currentWindowText);
+      const elapsed   = Date.now() - windowStartTime;
+      const isStable  = wordCount >= P.stableWordCount || elapsed >= P.stableElapsed || newSegments.length >= P.stableSegments;
 
       if (!isStable) {
         transferFlags();
@@ -671,7 +788,7 @@ if (window.__audioTranscriptionOverlayApi) {
       const tts = settings.enableTts ? "ON" : "OFF";
       const geminiOn = enableGeminiTranslation;
       const statusText = window.__transcriptionStatusText || "";
-      const isError = statusText && statusText.toLowerCase().includes("error");
+      const isError = statusText && (statusText.toLowerCase().includes("error") || statusText.toLowerCase().includes("fallback"));
       const statusBg = isError ? "rgba(220,38,38,0.25)" : "rgba(34,197,94,0.18)";
       const statusBorder = isError ? "rgba(248,113,113,0.4)" : "rgba(74,222,128,0.35)";
       const statusColor = isError ? "#fca5a5" : "#86efac";
@@ -703,7 +820,7 @@ if (window.__audioTranscriptionOverlayApi) {
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#94a3b8;letter-spacing:0.03em;line-height:1.5;min-height:18px;width:100%;">
             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">${statsHtml}</span>
-            ${statusText ? `<span style="flex-shrink:0;padding:2px 8px;border-radius:999px;background:${statusBg};border:1px solid ${statusBorder};color:${statusColor};font-weight:700;font-size:10px;white-space:nowrap;display:inline-flex;align-items:center;max-width:200px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(statusText)}</span>` : ""}
+            ${statusText ? `<span title="${escapeHtml(statusText).replace(/"/g, '&quot;')}" style="flex-shrink:0;padding:2px 8px;border-radius:999px;background:${statusBg};border:1px solid ${statusBorder};color:${statusColor};font-weight:700;font-size:10px;white-space:nowrap;display:inline-flex;align-items:center;max-width:350px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(statusText)}</span>` : ""}
           </div>
         </div>
       `;

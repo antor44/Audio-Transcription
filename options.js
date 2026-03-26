@@ -206,7 +206,12 @@ function cleanupAudioResources() {
       try {
         window.recorder.disconnect();
       } catch (e) {}
-      window.recorder.onaudioprocess = null;
+      // AudioWorkletNode uses port messaging instead of onaudioprocess.
+      // Close the port so the processor stops posting messages.
+      try {
+        window.recorder.port.onmessage = null;
+        window.recorder.port.close();
+      } catch (e) {}
     }
   } catch (e) {}
 
@@ -398,18 +403,35 @@ async function startRecord(option) {
   window.audioContext = context;
   window.audioDataCache = [];
 
+  // Register the AudioWorklet processor module, then set up the capture node.
+  // Using AudioWorkletNode replaces the deprecated ScriptProcessorNode.
+  try {
+    const processorUrl = chrome.runtime.getURL("audio-processor.js");
+    await context.audioWorklet.addModule(processorUrl);
+  } catch (e) {
+    console.error("AudioWorklet module load failed, aborting capture:", e);
+    cleanupAndClose(true);
+    window.close();
+    return;
+  }
+
   const mediaStream = context.createMediaStreamSource(stream);
-  const recorder = context.createScriptProcessor(4096, 1, 1);
+  const workletNode = new AudioWorkletNode(context, "audio-capture-processor", {
+    numberOfInputs: 1,
+    numberOfOutputs: 0,
+    channelCount: 1
+  });
 
   window.mediaStream = mediaStream;
-  window.recorder = recorder;
+  window.recorder = workletNode;
 
-  recorder.onaudioprocess = (event) => {
+  // Receive audio chunks from the worklet thread.
+  workletNode.port.onmessage = (event) => {
     if (cleanupDone || !context || !isServerReady) return;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
     try {
-      const inputData = event.inputBuffer.getChannelData(0);
+      const inputData = event.data; // Float32Array transferred from worklet
       const audioData16kHz = resampleTo16kHZ(inputData, context.sampleRate);
 
       if (window.audioDataCache) {
@@ -423,8 +445,9 @@ async function startRecord(option) {
     } catch (e) {}
   };
 
-  mediaStream.connect(recorder);
-  recorder.connect(context.destination);
+  mediaStream.connect(workletNode);
+  // AudioWorkletNode with numberOfOutputs:0 does not need to be connected
+  // to the destination. Connecting mediaStream directly keeps audio playing.
   mediaStream.connect(context.destination);
 
   window.addEventListener("beforeunload", () => cleanupAndClose(false), {

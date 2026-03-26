@@ -164,22 +164,36 @@ function overlapSuffixPrefix(baseText, nextText, maxWords = 40, minWords = 3) {
   return 0;
 }
 
+// Spaceless-script detector for translation-output dedup and prompt context.
+// Same character ranges as SPACELESS_RE in content.js; duplicated here so
+// background.js remains self-contained (no shared module needed).
+const SPACELESS_RE_BG =
+  /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0E7F\u1000-\u109F\u1780-\u17FF]/;
+
 function trimTranslatedPrefixOverlap(previousText, newText) {
-  const prev = splitWords(previousText);
-  const rawNew = normalizeText(newText).split(/\s+/).filter(Boolean);
+  // Primary path: word-overlap deduplication for space-separated scripts.
+  const prev    = splitWords(previousText);
+  const rawNew  = normalizeText(newText).split(/\s+/).filter(Boolean);
   const normNew = splitWords(newText);
   const max = Math.min(30, prev.length, normNew.length);
 
   for (let size = max; size >= 3; size--) {
     let ok = true;
     for (let i = 0; i < size; i++) {
-      if (prev[prev.length - size + i] !== normNew[i]) {
-        ok = false;
-        break;
-      }
+      if (prev[prev.length - size + i] !== normNew[i]) { ok = false; break; }
     }
-    if (ok) {
-      return rawNew.slice(size).join(" ").trim();
+    if (ok) return rawNew.slice(size).join(" ").trim();
+  }
+
+  // Fallback for spaceless-script output (e.g. translating INTO Japanese/Chinese):
+  // word-split produces one huge token, so use character-level overlap instead.
+  if (SPACELESS_RE_BG.test(normalizeText(newText))) {
+    const prevFlat = normalizeText(previousText).replace(/\s+/g, "").slice(-60);
+    const newFlat  = normalizeText(newText).replace(/\s+/g, "");
+    for (let len = Math.min(40, newFlat.length); len >= 3; len--) {
+      if (prevFlat.endsWith(newFlat.slice(0, len))) {
+        return normalizeText(newText).slice(len);
+      }
     }
   }
 
@@ -231,22 +245,34 @@ async function translateWithGoogle(text, targetLangCode) {
 }
 
 // Build generation config and optional thinking config based on model name.
+// API schema differs by model family:
+//   - gemini-3.x models use thinkingLevel (string: "none"|"minimal"|"low")
+//   - gemini-2.5 models use thinkingBudget (integer tokens)
+// These are NOT interchangeable — sending the wrong schema is silently ignored
+// or may cause errors.
 function _buildGenerationConfig(model) {
   let thinkingConfig = null;
 
   if (model.match(/gemini-3(\.\d+)?.*pro/i)) {
+    // gemini-3.x-pro: thinkingLevel string API. "low" is the minimum accepted
+    // value that reliably works for Pro variants.
     thinkingConfig = { thinkingLevel: "low" };
   } else if (model.match(/gemini-3(\.\d+)?.*flash.*lite/i)) {
     thinkingConfig = { thinkingLevel: "minimal" };
   } else if (model.match(/gemini-3(\.\d+)?.*flash/i)) {
     thinkingConfig = { thinkingLevel: "minimal" };
   } else if (model.match(/gemini-2\.5.*pro/i)) {
+    // gemini-2.5-pro: thinkingBudget integer API. Budget:0 is unreliable per
+    // known API issues; 128 is a pragmatic low value that is honoured.
     thinkingConfig = { thinkingBudget: 128 };
   } else if (model.match(/gemini-2\.5.*flash/i)) {
     thinkingConfig = { thinkingBudget: 0 };
   }
 
-  const generationConfig = { temperature: 0.1, maxOutputTokens: 256 };
+  // 1024 tokens gives enough headroom for a ~400-char source batch translated
+  // into any language. The previous value of 256 silently truncated larger
+  // batches (fast CJK streams), producing partial translation output.
+  const generationConfig = { temperature: 0.1, maxOutputTokens: 1024 };
   if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
   return generationConfig;
 }
@@ -257,6 +283,12 @@ const SAFETY_SETTINGS_OFF = [
   { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
   { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
 ];
+
+// Returns true if the model is a large/slow Pro variant that warrants
+// stricter timeouts to fail-fast to Google Translate.
+function _isProModel(model) {
+  return /pro/i.test(model);
+}
 
 async function _geminiAttempt(prompt, model, apiKey, timeoutMs) {
   const controller = new AbortController();
@@ -284,17 +316,26 @@ async function _geminiAttempt(prompt, model, apiKey, timeoutMs) {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const errorMsg = errorData?.error?.message || response.statusText || "Fetch error";
+      console.error(`Gemini HTTP ${response.status} for model "${model}":`, errorMsg, errorData);
       throw new Error(`Gemini HTTP ${response.status}: ${errorMsg}`);
     }
 
     const data = await response.json();
-    return normalizeText(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
+
+    // Thinking models (e.g. gemini-3.1-pro-preview) return multiple parts:
+    // the first part(s) may be internal thoughts (thought:true), and the
+    // actual translation is in the last non-thought part. Reading only
+    // parts[0] silently returns empty for these models.
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const textPart = parts.find(p => !p.thought && typeof p.text === "string" && p.text.trim()) || parts[0];
+    return normalizeText(textPart?.text || "");
   } finally {
     clearTimeout(timer);
   }
 }
 
-// Build prompt: correction mode when source == target, translation otherwise.
+// Build prompt: correction mode when source language == target language,
+// translation mode otherwise.
 function _buildPrompt(input, langName, isCorrection, shownTail) {
   const strictRule =
     "Output ONLY the plain subtitle text. " +
@@ -311,27 +352,35 @@ function _buildPrompt(input, langName, isCorrection, shownTail) {
       `If a word seems wrong or odd, keep it exactly as-is.\n` +
       `Input: ${input}`
     );
-  } else {
-    const rawAnchor = shownTail || translatedContextWindow.join(" ");
-    const anchor = rawAnchor
-      ? rawAnchor.split(/\s+/).filter(Boolean).slice(-4).join(" ")
-      : "";
+  }
 
-    if (anchor) {
-      return (
-        `${strictRule}\n` +
-        `Task: Translate the New Text to ${langName}.\n` +
-        `Context (previously translated end): "... ${anchor}"\n` +
-        `Output ONLY the translation of the New Text. Do NOT translate or include the Context in your output.\n` +
-        `New Text: ${input}`
-      );
+  const rawAnchor = shownTail || translatedContextWindow.join(" ");
+  let anchor = "";
+  if (rawAnchor) {
+    // For spaceless-script context (CJK, Thai…) split(/\s+/) produces one huge
+    // token — use the last N raw characters instead.
+    if (SPACELESS_RE_BG.test(rawAnchor)) {
+      anchor = rawAnchor.replace(/\s+/g, "").slice(-20);
+    } else {
+      anchor = rawAnchor.split(/\s+/).filter(Boolean).slice(-4).join(" ");
     }
+  }
+
+  if (anchor) {
     return (
       `${strictRule}\n` +
-      `Task: Translate the text to ${langName}.\n` +
-      `Input: ${input}`
+      `Task: Translate the New Text to ${langName}.\n` +
+      `Context (previously translated end): "... ${anchor}"\n` +
+      `Output ONLY the translation of the New Text. Do NOT translate or include the Context in your output.\n` +
+      `New Text: ${input}`
     );
   }
+
+  return (
+    `${strictRule}\n` +
+    `Task: Translate the text to ${langName}.\n` +
+    `Input: ${input}`
+  );
 }
 
 async function translateWithGemini(originalText, targetLangCode, model, apiKey, sourceLangCode, shownTail) {
@@ -350,18 +399,35 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
 
   const prompt = _buildPrompt(input, langName, isCorrection, shownTail);
 
-  let translated = "";
-  try {
-    translated = await _geminiAttempt(prompt, model, apiKey, 3000);
-  } catch (e) {
-    console.warn("Gemini attempt 1 failed:", e.message);
-  }
+  // Pro models think before answering and can take 5-8 s easily.
+  // Strategy: 1 long attempt (8 s) instead of 2 short ones that always expire.
+  // Non-Pro models (flash, flash-lite): 2 attempts × 4 s each (max 8 s total).
+  const isPro = _isProModel(model);
 
-  if (!translated) {
+  let translated = "";
+  let geminiError = ""; // captures actual API error reason for the status bar
+
+  if (isPro) {
     try {
-      translated = await _geminiAttempt(prompt, model, apiKey, 3000);
+      translated = await _geminiAttempt(prompt, model, apiKey, 8000);
     } catch (e) {
-      console.warn("Gemini attempt 2 failed:", e.message);
+      geminiError = e.name === "AbortError" ? `${model}: timeout (8s)` : `${model}: ${e.message}`;
+      console.warn("Gemini Pro attempt failed:", geminiError);
+    }
+  } else {
+    try {
+      translated = await _geminiAttempt(prompt, model, apiKey, 4000);
+    } catch (e) {
+      geminiError = e.name === "AbortError" ? `${model}: timeout (4s)` : `${model}: ${e.message}`;
+      console.warn("Gemini attempt 1 failed:", geminiError);
+    }
+    if (!translated) {
+      try {
+        translated = await _geminiAttempt(prompt, model, apiKey, 4000);
+      } catch (e) {
+        if (!geminiError) geminiError = e.name === "AbortError" ? `${model}: timeout (4s)` : `${model}: ${e.message}`;
+        console.warn("Gemini attempt 2 failed:", geminiError);
+      }
     }
   }
 
@@ -372,7 +438,7 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
     if (translated) usedFallback = true;
   }
 
-  if (!translated) return "";
+  if (!translated) return { text: "", geminiError };
 
   const contextEntry = shownTail
     ? shownTail.split(/\s+/).filter(Boolean).slice(-20).join(" ") + " " + translated
@@ -382,7 +448,8 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
     translatedContextWindow.shift();
   }
 
-  return usedFallback ? `\u207A ${translated}` : translated;
+  const text = usedFallback ? `\u207A ${translated}` : translated;
+  return { text, geminiError: usedFallback ? geminiError : "" };
 }
 
 function speakText(text, lang) {
@@ -527,6 +594,15 @@ async function startCaptureInternal(options) {
   isCaptureStarting = true;
 
   try {
+    // Always send STOP to the previous source tab before starting a new session.
+    // capturingState.isCapturing can already be false (PiP activation, network
+    // drop, stream inactivity) while the content-script overlay is still alive.
+    // Sending STOP unconditionally closes any orphaned overlay.
+    const prevSourceTabId = await getStorageValue("captureSourceTabId");
+    if (prevSourceTabId) {
+      await sendMessageToTab(prevSourceTabId, { type: "STOP" });
+    }
+
     const currentState = await getStorageValue("capturingState");
     if (currentState?.isCapturing) {
       await stopCaptureInternal();
@@ -719,27 +795,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       getStorage(["geminiApiKey", "geminiModel", "targetLanguage", "enableTts", "selectedLanguage"])
         .then(async (res) => {
           const targetLang = res.targetLanguage || "es";
-          const apiKey = res.geminiApiKey || "";
-          const model = res.geminiModel || "gemini-3.1-flash-lite-preview";
+          const apiKey    = res.geminiApiKey || "";
+          const model     = res.geminiModel || "gemini-3.1-flash-lite-preview";
           const sourceLang = res.selectedLanguage || "";
-          const shownTail = normalizeText(message.shownTail || "");
+          const shownTail  = normalizeText(message.shownTail || "");
 
           let translated = "";
 
           if (model === "google-translate") {
             translated = await translateWithGoogle(message.text, targetLang);
+          } else if (!apiKey) {
+            // No Gemini API key configured — fall back to Google Translate silently
+            // instead of surfacing an error that blocks all future translation.
+            console.warn("Gemini API key not set, falling back to Google Translate.");
+            translated = await translateWithGoogle(message.text, targetLang);
+            if (translated) translated = "\u207A " + translated; // prefix ⁺ to signal fallback
           } else {
-            if (!apiKey) {
-              sendResponse({ success: false, error: "API Key missing" });
-              return;
-            }
             try {
-              translated = await translateWithGemini(message.text, targetLang, model, apiKey, sourceLang, shownTail);
+              const result = await translateWithGemini(message.text, targetLang, model, apiKey, sourceLang, shownTail);
+              // translateWithGemini returns {text, geminiError} so the status bar
+              // can show the real API failure reason when Gemini falls back to GT.
+              translated = result?.text ?? result ?? "";
+              const geminiError = result?.geminiError || "";
+              if (res.enableTts && translated) {
+                const ttsText = translated.replace(/^\u207A\s*/, "");
+                speakText(ttsText, targetLang);
+              }
+              if (geminiError) {
+                // Surface the real Gemini error in the status bar.
+                console.warn("Gemini fallback to GT, reason:", geminiError);
+                sendResponse({ success: true, data: translated, geminiError });
+              } else {
+                sendResponse({ success: true, data: translated });
+              }
             } catch (e) {
               console.error("translateWithGemini caught:", e);
               sendResponse({ success: false, error: e.message });
-              return;
             }
+            return;
           }
 
           if (res.enableTts && translated) {

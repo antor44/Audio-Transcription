@@ -279,6 +279,12 @@
       if (!runtimeErr && response?.success) {
         if (response.data) {
           addTranslatedChunk(response.data);
+        }
+        // If Gemini failed internally and fell back to Google Translate,
+        // show the actual API error in the status bar for diagnosis.
+        if (response.geminiError) {
+          updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
+        } else {
           updateHeaderStatusText("Translation Active");
         }
       } else {
@@ -573,7 +579,7 @@
     const G = "#4ade80";
     const M = "#94a3b8";
     const statusText = window.__transcriptionStatusText || "";
-    const isError = statusText && statusText.toLowerCase().includes("error");
+    const isError = statusText && (statusText.toLowerCase().includes("error") || statusText.toLowerCase().includes("fallback"));
     const statusBg = isError ? "rgba(220,38,38,0.25)" : "rgba(34,197,94,0.18)";
     const statusBorder = isError ? "rgba(248,113,113,0.4)" : "rgba(74,222,128,0.35)";
     const statusColor = isError ? "#fca5a5" : "#86efac";
@@ -597,7 +603,7 @@
 
     statusLineEl.innerHTML =
       `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${statsHtml}</span>` +
-      (statusText ? `<span style="flex-shrink:0;padding:2px 8px;border-radius:999px;background:${statusBg};border:1px solid ${statusBorder};color:${statusColor};font-weight:700;font-size:10px;white-space:nowrap;">${escapeHtml(statusText)}</span>` : "");
+      (statusText ? `<span title="${escapeHtml(statusText).replace(/"/g, '&quot;')}" style="flex-shrink:0;padding:2px 8px;border-radius:999px;background:${statusBg};border:1px solid ${statusBorder};color:${statusColor};font-weight:700;font-size:10px;white-space:nowrap;max-width:350px;overflow:hidden;text-overflow:ellipsis;display:inline-block;">${escapeHtml(statusText)}</span>` : "");
   }
 
   function updateHeaderStatusText(text) {
