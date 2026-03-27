@@ -336,25 +336,150 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 
 **Q: What is a localhost server? Could I use the extension from the internet to connect to my server?**
 
-A: A localhost server is one running on your own PC. The Chrome extension uses one port to communicate with this server, which transcribes the audio played on a webpage. Alternatively, the server can transcribe multiple audio streams from different web browsers running on your PC simultaneously.
+**A:** A localhost server is one running on your own PC. The Chrome extension uses one port to communicate with this server, which transcribes the audio played on a webpage. Alternatively, the server can transcribe multiple audio streams from different web browsers running on your PC simultaneously.
 
 The loopback interface is a virtual network interface for each user that, by default, is not accessible from outside your computer. However, you can configure the server and the extension to connect from different PCs on your LAN. It is also possible to connect the Chrome extension to the server via the Internet, although this requires additional network settings for your operating system and router.
 
 **Q: Are connections to the server secure? Is it safe to use the extension from the Internet to connect to my server?**
 
-A: The WhisperLive server uses WebSockets without secure connections, so both audio clips and transcribed texts are transmitted unencrypted. This is not a problem on a local server or when used on a LAN. If security is required, you can connect clients to the server via SSH tunnels, which provide sufficient security.
+**A:** The WhisperLive server uses WebSockets without secure connections, so both audio clips and transcribed texts are transmitted unencrypted. This is not a problem on a local server or when used on a LAN. If security is required, you can connect clients to the server via SSH tunnels, which provide sufficient security.
 
 **Q: Can the server run with GPU acceleration?**
 
-A: WhisperLive Server supports the `faster‑whisper` backend accelerated by a GPU, which should be automatically detected as long as the system has a compatible version of the Nvidia CUDA libraries installed. It also supports the TensorRT backend for Nvidia graphics cards, which is generally more efficient than `faster‑whisper`. See the WhisperLive documentation for detailed configuration instructions.
+**A:** By default, WhisperLive Server supports the `faster_whisper` backend accelerated by a GPU, which should be automatically detected as long as the system has a compatible version of the Nvidia CUDA libraries installed. The server supports 3 backends: `faster_whisper`, `tensorrt`, and `openvino` (Intel CPU/GPU). The `tensorrt` backend is designed for Nvidia graphics cards and is generally more efficient than `faster_whisper`. See the WhisperLive documentation for detailed configuration instructions.
 
-Keep in mind that although WhisperLive supports multiple concurrent clients on a single GPU, there are limitations due to the limited amount of available VRAM and compute capacity. Primarily, the ability to handle multiple clients depends on the available VRAM. Notably, the server can be configured in single‑model mode to optimize VRAM usage, but in that case all clients must use the same model size.
+Keep in mind that although WhisperLive supports multiple concurrent clients on a single GPU, there are limitations due to available VRAM and compute capacity. Primarily, the ability to handle multiple clients depends on the GPU's VRAM. Notably, the server can be configured in single‑model mode to optimize memory usage, but in that case, all clients must use the same model size.
 
-Additionally, WhisperLive does not include a built-in load balancing system; there are no mechanisms to distribute the load among multiple server instances, so an external load balancing solution must be implemented.
+Additionally, WhisperLive does not include a built-in load balancing system; there are no mechanisms to distribute the load among multiple server instances, so an external load balancing solution must be implemented if needed.
+
+**Q: Can I use the original WhisperLive server code directly?**
+
+**A:** Yes. The Chrome extension is fully compatible with the official WhisperLive server from the Collabora repository. For example, this command from the upstream project works without any changes:
+
+```bash
+python3 run_server.py \
+  --port 9090 \
+  --backend faster_whisper \
+  --max_clients 4 \
+  --max_connection_time 600
+```
+> [!NOTE]
+> The parameters shown above (`--backend`, `--max_clients`, `--max_connection_time`, etc.) are supported by recent versions of the official WhisperLive library. This project’s custom `run_server.py` does not change their semantics; it simply ensures they keep working across different library versions by adapting to the installed API at runtime.
+
+In practice, you can install only the Chrome extension from the Chrome Web Store and then install the official Python package:
+
+```bash
+pip install whisper-live
+```
+
+and run the server with the upstream `run_server.py` exactly as described in the WhisperLive documentation.
+
+
+> [!NOTE]
+> Installing the `whisper-live` library with:
+>
+>```bash
+>pip install whisper-live
+>```
+>
+>gives you the Python package (backend logic, WebSocket server, etc.), but it does not ship the example `run_server.py` file that is present in the Collabora GitHub repository.
+>
+>The upstream `run_server.py` is provided as a standalone example script in the repository, not as part of the wheel or source distribution on PyPI. To use the official server script you must:
+>
+>1. Either clone or download the WhisperLive repository and run its `run_server.py`, or
+>2. Download only the `run_server.py` file from the WhisperLive repository and place it next to your project.
+>
+>This extension’s repository therefore includes its own `run_server.py` and `WhisperLive_server.sh` so that you have:
+>
+>*   A ready‑to‑run server launcher with enhanced logs and CLI options, and
+>*   Full compatibility with the upstream WhisperLive behavior, without requiring users to manually hunt for example scripts in the original repository.
+
+**Q: What does this repository’s custom run_server.py add compared to the original one?**
+
+**A:** The `run_server.py` file included in this repository is a thin wrapper around the official WhisperLive server. It is designed to be a drop‑in replacement that keeps the original behavior but improves usability and compatibility:
+
+*   **Preserves upstream behavior:**
+    It still uses `whisper_live.server.TranscriptionServer` as in the Collabora project, and calls `server.run(...)` with the same core parameters (`host`, `port`, `backend`, `paths`, `limits`, etc.), so the server behaves just like the official implementation.
+
+*   **Enhanced logging output:**
+    It replaces the default logging with a categorized, colorized format (including emoji icons) to clearly distinguish server startup, client connect/disconnect, audio processing messages, warnings, and errors.
+
+*   **Configurable beam size for faster-whisper:**
+    WhisperLive does not expose `beam_size` directly. This wrapper injects a small monkey‑patch into the `ServeClientFasterWhisper` backend so that every transcription call can use a user‑defined `--beam-size` (or `--beam_size`) value, especially useful for optimizing live streaming quality vs latency.
+
+*   **Additional CLI convenience options:**
+    It adds a `--device` argument (auto/cpu/cuda) for the `faster_whisper` backend and exposes options such as `--max_clients` and `--max_connection_time` at the script level. For recent WhisperLive versions that already support these parameters, the wrapper forwards them unchanged to `TranscriptionServer.run()`. For older versions that do not accept them, it automatically filters out unsupported keys and falls back to creating a `ClientManager` directly when possible.
+
+*   **Version‑aware parameter forwarding:**
+    Before calling `server.run(**kwargs)`, the wrapper inspects the actual signature of the installed WhisperLive version and splits arguments into “accepted” and “rejected”. Unsupported options are either applied via a compatible fallback (like `ClientManager`) or safely ignored with a warning, so the same script can run against multiple WhisperLive versions without breaking.
+
+In short, this `run_server.py` is mostly a smarter command‑line interface and logging layer around the official server: it keeps the API consistent and user‑friendly while remaining aligned with upstream behavior.
+
+**Q: What does the WhisperLive_server.sh launcher script do?**
+
+**A:** The `WhisperLive_server.sh` script is a convenience launcher that wraps both the custom `run_server.py` and the official WhisperLive Docker images. Its goals are:
+
+*   **Unified entry point:**
+    You can start the server in different modes with a single script:
+
+    *   **Local mode** (no Docker, auto device):
+        ```bash
+        ./WhisperLive_server.sh
+        ```
+    *   **Local CPU‑only** (no CUDA needed):
+        ```bash
+        ./WhisperLive_server.sh cpu
+        ```
+    *   **Docker auto / CPU / CUDA / OpenVINO / TensorRT:**
+        ```bash
+        ./WhisperLive_server.sh docker
+        ./WhisperLive_server.sh docker cpu
+        ./WhisperLive_server.sh docker cuda
+        ./WhisperLive_server.sh docker openvino
+        ./WhisperLive_server.sh docker trt
+        ```
+
+*   **Improved terminal output:**
+    It prints consistent startup banners, colorized messages, and emoji labels (server, info, warnings, errors) so that logs are much easier to read compared to a plain Python process.
+
+*   **Local mode with CPU/GPU selection:**
+    In local mode, the script calls the Python server like this:
+
+    *   **Default** (auto, typically GPU if CUDA is available):
+        ```bash
+        python3 run_server.py \
+          --host "$HOST" \
+          --port "$PORT" \
+          --backend faster_whisper \
+          --max_clients "$MAX_CLIENTS" \
+          --max_connection_time "$MAX_CONNECTION_TIME" \
+          --omp_num_threads "$OMP_THREADS"
+        ```
+    *   **CPU‑only mode** (for systems without a working NVIDIA/CUDA stack):
+        ```bash
+        CUDA_VISIBLE_DEVICES="" \
+        python3 run_server.py \
+          --host "$HOST" \
+          --port "$PORT" \
+          --backend faster_whisper \
+          --device cpu \
+          --max_clients "$MAX_CLIENTS" \
+          --max_connection_time "$MAX_CONNECTION_TIME" \
+          --omp_num_threads "$CPU_THREADS"
+        ```
+    Here, `CPU_THREADS` is chosen conservatively based on the number of available cores (e.g., half the cores, clamped to a safe range), so CPU‑only mode works reasonably well on a wide variety of machines.
+
+*   **Docker mode orchestration:**
+    For Docker, the script:
+    1. Checks Docker permissions and removes any previous container with the same name.
+    2. Mounts model/cache directories and the local `run_server.py` into the container so that newer command‑line options (like `--max_clients`) are available even with older images.
+    3. Selects the backend (`faster_whisper`, `tensorrt`, `openvino`) and passes through the appropriate arguments (`--trt_model_path`, multilingual flags, etc.).
+
+Overall, `WhisperLive_server.sh` is a practical “launcher and wrapper” around the official server and Docker images. It does not change the core transcription logic; it just makes it easier to start the server in different environments and with different hardware configurations.
 
 **Q: How do I set up WhisperLive with TensorRT acceleration using Docker, and what should I do if I get CUDA errors?**
 
-Docker is the recommended (and easiest) way to run the TensorRT backend. It bundles the exact versions of CUDA, TensorRT-LLM, and all dependencies that have been tested together — no manual dependency management needed.
+**A:** Docker is the recommended (and easiest) way to run the TensorRT backend. It bundles the exact versions of CUDA, TensorRT-LLM, and all dependencies that have been tested together — no manual dependency management needed.
 
 #### Step 1 — Prerequisites
 - NVIDIA GPU with CUDA support (tested on RTX 30xx/40xx)
@@ -541,11 +666,11 @@ Or pass flags at runtime:
 
 **Q: What quality of transcription can I expect when using only a low-level processor?**
 
-A: This Chrome extension program is based on WhisperLive, which is based on `faster-whisper`, a highly optimized implementation of OpenAI's Whisper AI. The performance of the transcription largely depends on this software. For English, you can expect very good transcriptions of video or audio streams even on low-end or older PCs, including those that are at least 10 years old (Intel Haswell). You can easily configure the application with models such as `small.en` or `base.en`, which offer excellent transcriptions for English. However, transcriptions of other major languages are not as good with small models, and minority languages do not perform well at all. For these, you will need a better CPU or a supported GPU.
+**A**: This Chrome extension program is based on WhisperLive, which is based on `faster-whisper`, a highly optimized implementation of OpenAI's Whisper AI. The performance of the transcription largely depends on this software. For English, you can expect very good transcriptions of video or audio streams even on low-end or older PCs, including those that are at least 10 years old (Intel Haswell). You can easily configure the application with models such as `small.en` or `base.en`, which offer excellent transcriptions for English. However, transcriptions of other major languages are not as good with small models, and minority languages do not perform well at all. For these, you will need a better CPU or a supported GPU.
 
 **Q: Some transcribed texts are difficult to read because words keep changing, and some phrases disappear or appear to be cut off. Why does this happen?**
 
-A: The extension displays the transcription output generated by the WhisperLive server, which approximates real-time transcription using incremental decoding. In this approach, the most recent audio chunk is transcribed quickly and then repeatedly reprocessed as additional context becomes available. As a result, previously generated words may be revised or replaced, causing visible changes in the displayed text.
+**A**: The extension displays the transcription output generated by the WhisperLive server, which approximates real-time transcription using incremental decoding. In this approach, the most recent audio chunk is transcribed quickly and then repeatedly reprocessed as additional context becomes available. As a result, previously generated words may be revised or replaced, causing visible changes in the displayed text.
 
 This behavior is inherent to Whisper-based models. Whisper was originally designed for batch transcription rather than low-latency streaming, so when it is adapted for real-time usage the intermediate results can be unstable.
 
