@@ -121,6 +121,10 @@ This command will enable the features necessary to run WSL and install the Ubunt
 
 If Ubuntu (or whatever recent Linux distribution among available ones) didn't install, then:
 ```bash
+wsl.exe --install Ubuntu
+```
+or
+```bash
 wsl.exe --install Ubuntu-24.04
 ```
 
@@ -282,10 +286,18 @@ You can launch the server with a double-click from Windows by creating a shortcu
 
 **Basic — if your environment is already configured in your shell profile:**
 ```
+C:\Windows\System32\wsl.exe -d Ubuntu --cd ~ bash --login -c "cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
+```
+or
+```
 C:\Windows\System32\wsl.exe -d Ubuntu-24.04 --cd ~ bash --login -c "cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
 ```
 
 **With explicit environment activation — recommended if you use a virtualenv or Conda environment:**
+```
+C:\Windows\System32\wsl.exe -d Ubuntu --cd ~ bash --login -c "source ~/python-environments/whisper-live/bin/activate && cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
+```
+or
 ```
 C:\Windows\System32\wsl.exe -d Ubuntu-24.04 --cd ~ bash --login -c "source ~/python-environments/whisper-live/bin/activate && cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
 ```
@@ -294,7 +306,7 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 > [!IMPORTANT]
 > The `--login` flag is required. Without it, the shell launched by Windows does not load the user environment (PATH, CUDA variables, etc.), and the server will fail to start.
 > The `--cd ~` flag sets the starting directory to the Linux home folder — Windows shortcut targets cannot use Linux paths directly.
-> If your WSL distribution has a different name, replace `Ubuntu-24.04` with the name shown by running `wsl --list` in a Windows terminal.
+> If your WSL distribution has a different name, replace `Ubuntu` with the name shown by running `wsl --list` in a Windows terminal.
 
 **To create the shortcut:**
 1. Right-click on the Desktop → **New → Shortcut**
