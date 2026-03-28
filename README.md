@@ -142,7 +142,7 @@ sudo apt-get install portaudio19-dev python3-all-dev virtualenv python3 python3-
 
 ### For Ubuntu/Debian
 ```sh
-sudo apt install virtualenv python3 python3-pip
+sudo apt install python3 python3-pip virtualenv
 ```
 
 ### For macOS
@@ -150,8 +150,8 @@ sudo apt install virtualenv python3 python3-pip
 First, if you didn't install Homebrew, visit [brew.sh](https://brew.sh/) and follow the installation instructions.
 
 ```sh
-brew install virtualenv
 brew install python3
+brew install virtualenv
 ```
 
 ---
