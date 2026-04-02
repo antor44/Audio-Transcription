@@ -352,10 +352,6 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 
 The loopback interface is a virtual network interface for each user that, by default, is not accessible from outside your computer. However, you can configure the server and the extension to connect from different PCs on your LAN. It is also possible to connect the Chrome extension to the server via the Internet, although this requires additional network settings for your operating system and router.
 
-**Q: Are connections to the server secure? Is it safe to use the extension from the Internet to connect to my server?**
-
-**A:** The WhisperLive server uses WebSockets without secure connections, so both audio clips and transcribed texts are transmitted unencrypted. This is not a problem on a local server or when used on a LAN. If security is required, you can connect clients to the server via SSH tunnels, which provide sufficient security.
-
 **Q: Can the server run with GPU acceleration?**
 
 **A:** By default, WhisperLive Server supports the `faster_whisper` backend accelerated by a GPU, which should be automatically detected as long as the system has a compatible version of the Nvidia CUDA libraries installed. The server supports 3 backends: `faster_whisper`, `tensorrt`, and `openvino` (Intel CPU/GPU). The `tensorrt` backend is designed for Nvidia graphics cards and is generally more efficient than `faster_whisper`. See the WhisperLive documentation for detailed configuration instructions.
@@ -675,6 +671,18 @@ Or pass flags at runtime:
 ```bash
 ./WhisperLive_server.sh docker trt --model large-v2 --multilingual --port 9091
 ```
+
+**Q: Are connections to the server secure? Is it safe to use the extension from the Internet to connect to my server?**
+
+**A:** The extension uses the WhisperLive server, which before the latest versions only supported WebSockets without secure connections (`ws://`), meaning both audio clips and transcribed texts are transmitted unencrypted. For now, there are no plans to support secure connections natively due to the added complexity. This is not a problem when running on a local server (`localhost`) or within a trusted LAN. If security is required for external access, you can connect clients to the server via SSH tunnels, which provides sufficient security. Multiple remote clients can connect simultaneously by simply establishing their own individual SSH tunnels to the server.
+
+**Q: Is there a risk of my system being hacked if I run this server?**
+
+**A:** I am not a security expert, nor am I familiar with all the methods used to hack systems. However, running a program that acts as a server under a standard, non-privileged user account is quite normal, especially on Linux. 
+
+Keep in mind that modern computers are always connected to the internet in some capacity. The WhisperLive server operates like any standard network service, listening on a specific IP address and port. Simply running this type of server locally does not inherently add significant insecurity to your system.
+
+If you choose to expose the server to the outside world—which requires extra manual configuration, such as allowing the port through your firewall and setting up port forwarding on your router—anyone on the internet could theoretically connect to it. In that scenario, users would only have access to the specific transcription service provided by the program, except in the rare event of unknown bugs or security vulnerabilities within the software itself.
 
 **Q: What quality of transcription can I expect when using only a low-level processor?**
 
