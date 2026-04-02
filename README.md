@@ -155,7 +155,7 @@ First, if you didn't install Homebrew, visit [brew.sh](https://brew.sh/) and fol
 
 macOS requires a highly compatible Python version (3.12 is recommended):
 ```sh
-brew install python@3.12 virtualenv
+brew install python@3.12 virtualenv portaudio
 ```
 
 ---
