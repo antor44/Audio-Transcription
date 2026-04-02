@@ -153,9 +153,9 @@ sudo apt install python3 python3-pip virtualenv
 
 First, if you didn't install Homebrew, visit [brew.sh](https://brew.sh/) and follow the installation instructions.
 
+macOS requires a highly compatible Python version (3.12 is recommended):
 ```sh
-brew install python3
-brew install virtualenv
+brew install python@3.12 virtualenv
 ```
 
 ---
@@ -225,18 +225,27 @@ source ~/.bashrc
 ldconfig -p | grep libcublas
 ```
 
-You should see at least one line containing `libcublas.so.12`. If so, CUDA is ready and you can run the server normally with:
-```bash
-./WhisperLive_server.sh
-```
+You should see at least one line containing `libcublas.so.12`. If so, CUDA is ready and you can run the server normally.
 
 ---
 
-### Setting up the Python environment
+### Setting up the Python environment (all OSes)
 
 ```sh
 mkdir ~/python-environments
+
+# For Windows (WSL2) / Linux:
 virtualenv ~/python-environments/whisper-live
+
+```
+or
+```sh
+# For macOS (forces the use of Python 3.12 for maximum compatibility):
+virtualenv -p python3.12 ~/python-environments/whisper-live
+
+```
+Activate the Python environment:
+```sh
 source ~/python-environments/whisper-live/bin/activate
 ```
 
@@ -341,6 +350,10 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 ![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension4.jpg)
 
 ![Screenshot 3](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension5.jpg)
+
+![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension6.jpg)
+
+![Screenshot 3](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension7.jpg)
 
 ---
 
