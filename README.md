@@ -233,10 +233,10 @@ You should see at least one line containing `libcublas.so.12`. If so, CUDA is re
 
 ```sh
 mkdir ~/python-environments
-
+```
+```sh
 # For Windows (WSL2) / Linux:
 virtualenv ~/python-environments/whisper-live
-
 ```
 or
 ```sh
