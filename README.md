@@ -104,7 +104,50 @@ If you prefer to install it manually from the source code or want to modify the 
 
 ## Installing the WhisperLive Server
 
-Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or `virtualenv`. You must activate this environment to run the WhisperLive server.
+The Chrome extension is fully compatible with the official [WhisperLive](https://github.com/collabora/WhisperLive) server from the Collabora repository. You can either install the server example posted in the official Collabora repository or the enhanced version of the server in this repository.
+
+> [!NOTE]
+> Installing the `whisper-live` library with:
+>
+>```bash
+>pip install whisper-live
+>```
+>
+>gives you the Python package (backend logic, WebSocket server, etc.), but it does not ship the example `run_server.py` file that is present in the Collabora GitHub repository.
+>
+>The upstream `run_server.py` is provided as a standalone example script in the repository, not as part of the wheel or source distribution on PyPI. To use the official server script you must:
+>
+>1. Either clone or download the WhisperLive repository and run its `run_server.py`, or
+>2. Download only the `run_server.py` file from the WhisperLive repository and place it next to your project.
+>
+>This extension’s repository therefore includes its own `run_server.py` and `WhisperLive_server.sh` so that you have:
+>
+>*   A ready‑to‑run server launcher with enhanced logs and CLI options, and
+>*   Full compatibility with the upstream WhisperLive behavior, without requiring users to manually hunt for example scripts in the original repository.
+
+
+For example, this command from the upstream project works without any changes:
+
+```bash
+python3 run_server.py \
+  --port 9090 \
+  --backend faster_whisper \
+  --max_clients 4 \
+  --max_connection_time 600
+```
+> [!NOTE]
+> The parameters shown above (`--backend`, `--max_clients`, `--max_connection_time`, etc.) are supported by recent versions of the official WhisperLive library. This project’s custom `run_server.py` does not change their semantics; it also ensures they continue to work across different library versions by adapting to the installed version at runtime.
+
+In practice, you can install only the Chrome extension from the Chrome Web Store and then install the official Python package:
+
+```bash
+pip install whisper-live
+```
+
+and run the server with the upstream `run_server.py` exactly as described in the WhisperLive documentation.
+
+
+The recommended installation is the enhanced run_server version from this repository. The instructions below utilize a virtual environment to ensure compatibility and enhance security. Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or virtualenv. You must activate this environment to run the WhisperLive server.
 
 ---
 
@@ -371,48 +414,6 @@ The loopback interface is a virtual network interface for each user that, by def
 Keep in mind that although WhisperLive supports multiple concurrent clients on a single GPU, there are limitations due to available VRAM and compute capacity. Primarily, the ability to handle multiple clients depends on the GPU's VRAM. Notably, the server can be configured in single‑model mode to optimize memory usage, but in that case, all clients must use the same model size.
 
 Additionally, WhisperLive does not include a built-in load balancing system; there are no mechanisms to distribute the load among multiple server instances, so an external load balancing solution must be implemented if needed.
-
-**Q: Can I use the original WhisperLive server code directly?**
-
-**A:** Yes. The Chrome extension is fully compatible with the official WhisperLive server from the Collabora repository. For example, this command from the upstream project works without any changes:
-
-```bash
-python3 run_server.py \
-  --port 9090 \
-  --backend faster_whisper \
-  --max_clients 4 \
-  --max_connection_time 600
-```
-> [!NOTE]
-> The parameters shown above (`--backend`, `--max_clients`, `--max_connection_time`, etc.) are supported by recent versions of the official WhisperLive library. This project’s custom `run_server.py` does not change their semantics; it simply ensures they keep working across different library versions by adapting to the installed API at runtime.
-
-In practice, you can install only the Chrome extension from the Chrome Web Store and then install the official Python package:
-
-```bash
-pip install whisper-live
-```
-
-and run the server with the upstream `run_server.py` exactly as described in the WhisperLive documentation.
-
-
-> [!NOTE]
-> Installing the `whisper-live` library with:
->
->```bash
->pip install whisper-live
->```
->
->gives you the Python package (backend logic, WebSocket server, etc.), but it does not ship the example `run_server.py` file that is present in the Collabora GitHub repository.
->
->The upstream `run_server.py` is provided as a standalone example script in the repository, not as part of the wheel or source distribution on PyPI. To use the official server script you must:
->
->1. Either clone or download the WhisperLive repository and run its `run_server.py`, or
->2. Download only the `run_server.py` file from the WhisperLive repository and place it next to your project.
->
->This extension’s repository therefore includes its own `run_server.py` and `WhisperLive_server.sh` so that you have:
->
->*   A ready‑to‑run server launcher with enhanced logs and CLI options, and
->*   Full compatibility with the upstream WhisperLive behavior, without requiring users to manually hunt for example scripts in the original repository.
 
 **Q: What does this repository’s custom run_server.py add compared to the original one?**
 
