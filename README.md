@@ -725,24 +725,35 @@ Current and planned approaches include:
   Basic formatting rules could be applied, such as inserting line breaks or punctuation based on simple patterns.  
   A lightweight post-processing stage could also help correct common transcription artifacts. Heuristic rules may improve local coherence by detecting repeated or inconsistent word sequences and adjusting them using nearby context, provided the processing remains efficient enough for real-time operation.
 
+
 ---
+
 
 ## Licensing and Attribution
 
-This repository is distributed under **GPL-3.0-or-later**. The full license text is provided in the `LICENSE` file included at the repository root.
+This repository is distributed under **GPL-3.0-or-later**. The full license text is provided in the `LICENSE` file at the repository root.
 
 ### Third-party code
 
-The file `run_server.py` in this repository is based in part on the upstream `run_server.py` example from [collabora/WhisperLive](https://github.com/collabora/WhisperLive), whose upstream project is distributed under the **MIT License**. Because this repository adapts and redistributes that upstream material, the repository preserves the relevant upstream attribution notice in the file header and in `THIRD_PARTY_NOTICES.md`.
+The file `run_server.py` is based in part on the upstream `run_server.py` example from [collabora/WhisperLive](https://github.com/collabora/WhisperLive). The upstream WhisperLive project is distributed under the **MIT License**.
 
-The file `WhisperLive_server.sh` is an original launcher/orchestration script distributed under GPL-3.0-or-later as part of this repository.
+Accordingly, this repository preserves the relevant upstream copyright and MIT license notice for the upstream-derived material:
 
-### What you should keep in the repository
+- in the header of `run_server.py`, and
+- in `THIRD_PARTY_NOTICES.md`.
 
-- `LICENSE` — full GPL-3.0 text for the repository.
-- `THIRD_PARTY_NOTICES.md` — upstream attribution for MIT-licensed code included or adapted here.
+The file `WhisperLive_server.sh` is an original launcher/orchestration script distributed as part of this repository under **GPL-3.0-or-later**.
+
+### Repository structure
+
+The repository includes the following licensing and attribution files:
+
+- `LICENSE` — full GPL-3.0 text for this repository.
+- `THIRD_PARTY_NOTICES.md` — preserved copyright and MIT license notice for upstream code included or adapted here.
 - File headers in `run_server.py` and `WhisperLive_server.sh` — short copyright and license notices.
 
-### Practical note
+### Relationship between the licenses
 
-You do **not** need to replace the repository GPL license with the MIT license. Instead, keep the GPL `LICENSE` file already present in the repository and add a separate notice file for third-party attributions. That is the cleanest approach for this project structure.
+The repository-wide GPL-3.0-or-later license is not replaced by the upstream MIT license. Instead, the repository is distributed under GPL-3.0-or-later while preserving the required MIT copyright and permission notice for the upstream material incorporated into `run_server.py`.
+
+This structure reflects the licensing of the repository as distributed here together with the preserved notices required for the upstream MIT-licensed material.

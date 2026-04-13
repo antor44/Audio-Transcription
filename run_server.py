@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 # run_server.py — WhisperLive server launcher and compatibility wrapper
-# Version: 1.5
+# Version: 1.6
 #
 # Copyright (C) 2026 Antonio Ruiz
 #
-# This file is based in part on the upstream run_server.py example from
-# collabora/WhisperLive (MIT License).
-# Original project copyright: Copyright (c) 2023 Vineet Suryan, Collabora Ltd.
-# Additional modifications, compatibility logic, logging, and launcher features:
-# Copyright (C) 2026 Antonio Ruiz.
+# This file is part of Audio Transcription.
 #
-# This program is free software: you can redistribute it and/or modify
+# This file is based in part on the upstream run_server.py example from
+# collabora/WhisperLive, licensed under the MIT License.
+#
+# Upstream copyright notice:
+# Copyright (c) 2023 Vineet Suryan, Collabora Ltd.
+#
+# Audio Transcription is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful,
+# Audio Transcription is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# along with Audio Transcription. If not, see <https://www.gnu.org/licenses/>.
 #
-# Third-party notice: this file incorporates or adapts code and ideas from
-# collabora/WhisperLive. Preserve upstream copyright and license notices.
+# Additional third-party licensing information, including the preserved MIT
+# notice for upstream WhisperLive-derived material, is provided in
+# THIRD_PARTY_NOTICES.md.
 
 import argparse
 import inspect
