@@ -106,6 +106,18 @@ If you prefer to install it manually from the source code or want to modify the 
 
 The Chrome extension is fully compatible with the official [WhisperLive](https://github.com/collabora/WhisperLive) server from the Collabora repository. You can either install the server example posted in the official Collabora repository or the enhanced version of the server in this repository.
 
+For example, this command from the upstream project works without any changes:
+
+```bash
+python3 run_server.py \
+  --port 9090 \
+  --backend faster_whisper \
+  --max_clients 4 \
+  --max_connection_time 600
+```
+> [!NOTE]
+> The parameters shown above (`--backend`, `--max_clients`, `--max_connection_time`, etc.) are supported by recent versions of the official WhisperLive library. This project’s custom `run_server.py` does not change their semantics; it also ensures they continue to work across different library versions by adapting to the installed version at runtime.
+
 > [!NOTE]
 > Installing the `whisper-live` library with:
 >
@@ -125,19 +137,6 @@ The Chrome extension is fully compatible with the official [WhisperLive](https:/
 >*   A ready‑to‑run server launcher with enhanced logs and CLI options, and
 >*   Full compatibility with the upstream WhisperLive behavior, without requiring users to manually hunt for example scripts in the original repository.
 
-
-For example, this command from the upstream project works without any changes:
-
-```bash
-python3 run_server.py \
-  --port 9090 \
-  --backend faster_whisper \
-  --max_clients 4 \
-  --max_connection_time 600
-```
-> [!NOTE]
-> The parameters shown above (`--backend`, `--max_clients`, `--max_connection_time`, etc.) are supported by recent versions of the official WhisperLive library. This project’s custom `run_server.py` does not change their semantics; it also ensures they continue to work across different library versions by adapting to the installed version at runtime.
-
 In practice, you can install only the Chrome extension from the Chrome Web Store and then install the official Python package:
 
 ```bash
@@ -147,7 +146,7 @@ pip install whisper-live
 and run the server with the upstream `run_server.py` exactly as described in the WhisperLive documentation.
 
 
-The recommended installation is the enhanced run_server version from this repository. The instructions below utilize a virtual environment to ensure compatibility and enhance security. Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or virtualenv. You must activate this environment to run the WhisperLive server.
+The recommended installation is the enhanced `run_server.py` version from this repository. The instructions below utilize a virtual environment to ensure compatibility and enhance security. Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or virtualenv. You must activate this environment to run the WhisperLive server.
 
 ---
 
@@ -188,8 +187,10 @@ sudo apt-get install portaudio19-dev python3 python3-pip python3-all-dev virtual
 
 ### For Ubuntu/Debian
 ```sh
-sudo apt install python3 python3-pip virtualenv
+sudo apt install python3 python3-pip virtualenv portaudio19-dev
 ```
+> [!NOTE]
+> Depending on the Ubuntu/Debian version, you may need to install additional development packages, and on other Linux distributions the required package names may differ (for example, `portaudio19-dev` on Debian/Ubuntu, `portaudio-devel` on Fedora, or `portaudio` / `python-pyaudio` on Arch).
 
 ### For macOS
 
@@ -220,55 +221,52 @@ brew install python@3.12 virtualenv portaudio
 > ```bash
 > ./WhisperLive_server.sh
 > ```
-
----
-
-### Installing CUDA 12 + cuBLAS 12 in WSL2 (NVIDIA GPU only)
-
-This section only applies if you have an NVIDIA GPU and want hardware-accelerated transcription.
-
-#### Step 1 — Verify your NVIDIA driver in Windows
-
-Open a **Windows** Command Prompt (not WSL) and run:
-```cmd
-nvidia-smi
-```
-The top-right corner must show `CUDA Version: 12.x` or higher. If the command is not found, download and install the latest NVIDIA driver from [nvidia.com/drivers](https://www.nvidia.com/drivers) and restart Windows before continuing.
-
-#### Step 2 — Add the NVIDIA CUDA repository inside WSL
-
-Open your **WSL/Ubuntu terminal** and run:
-```bash
-wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
-sudo apt-get update
-```
-
-#### Step 3 — Install cuBLAS 12
-
-```bash
-sudo apt-get install -y libcublas-12-4 libcublas-dev-12-4
-```
-
-> [!NOTE]
-> Do **not** install the full `cuda-toolkit-12-4` meta-package on Ubuntu 24.04 (Noble). It pulls in `nsight-systems` which depends on `libtinfo5`, a library that does not exist in Noble. Installing only `libcublas` is sufficient for WhisperLive.
-
-#### Step 4 — Set environment variables
-
-```bash
-echo 'export PATH=/usr/local/cuda-12.4/bin:$PATH' >> ~/.bashrc
-echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
-source ~/.bashrc
-```
-
-#### Step 5 — Verify the installation
-
-```bash
-ldconfig -p | grep libcublas
-```
-
-You should see at least one line containing `libcublas.so.12`. If so, CUDA is ready and you can run the server normally.
-
+>
+>### Installing CUDA 12 + cuBLAS 12 in WSL2 (NVIDIA GPU only)
+>
+>This section only applies if you have an NVIDIA GPU and want hardware-accelerated transcription.
+>
+>#### Step 1 — Verify your NVIDIA driver in Windows
+>
+>Open a **Windows** Command Prompt (not WSL) and run:
+>```cmd
+>nvidia-smi
+>```
+>The top-right corner must show `CUDA Version: 12.x` or higher. If the command is not found, download and install the latest NVIDIA driver from [nvidia.com/drivers](https://www.nvidia.com/drivers) and restart Windows before continuing.
+>
+>#### Step 2 — Add the NVIDIA CUDA repository inside WSL
+>
+>Open your **WSL/Ubuntu terminal** and run:
+>```bash
+>wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
+>sudo dpkg -i cuda-keyring_1.1-1_all.deb
+>sudo apt-get update
+>```
+>
+>#### Step 3 — Install cuBLAS 12
+>
+>```bash
+>sudo apt-get install -y libcublas-12-4 libcublas-dev-12-4
+>```
+>
+>>⚠️ Do **not** install the full `cuda-toolkit-12-4` meta-package on Ubuntu 24.04 (Noble). It pulls in `nsight-systems` which depends on `libtinfo5`, a library that does not exist in Noble. Installing only `libcublas` is sufficient for WhisperLive.
+>
+>#### Step 4 — Set environment variables
+>
+>```bash
+>echo 'export PATH=/usr/local/cuda-12.4/bin:$PATH' >> ~/.bashrc
+>echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+>source ~/.bashrc
+>```
+>
+>#### Step 5 — Verify the installation
+>
+>```bash
+>ldconfig -p | grep libcublas
+>```
+>
+>You should see at least one line containing `libcublas.so.12`. If so, CUDA is ready and you can run the server normally.
+>
 ---
 
 ### Setting up the Python environment (all OSes)
