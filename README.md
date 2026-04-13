@@ -132,7 +132,7 @@ python3 run_server.py \
 >1. Either clone or download the WhisperLive repository and run its `run_server.py`, or
 >2. Download only the `run_server.py` file from the WhisperLive repository and place it next to your project.
 >
->This extension’s repository therefore includes its own `run_server.py` and `WhisperLive_server.sh` so that you have:
+>This extension repository therefore includes its own `run_server.py` and `WhisperLive_server.sh` so that you have:
 >
 >*   A ready‑to‑run server launcher with enhanced logs and CLI options, and
 >*   Full compatibility with the upstream WhisperLive behavior, without requiring users to manually hunt for example scripts in the original repository.
@@ -146,7 +146,7 @@ pip install whisper-live
 and run the server with the upstream `run_server.py` exactly as described in the WhisperLive documentation.
 
 
-The recommended installation is the enhanced `run_server.py` version from this repository. The instructions below utilize a virtual environment to ensure compatibility and enhance security. Depending on your operating system configuration, you may need to create a Python virtual environment using either Anaconda or virtualenv. You must activate this environment to run the WhisperLive server.
+The recommended installation is the enhanced `run_server.py` version from this repository. The instructions below use a Python virtual environment mainly to improve dependency isolation, compatibility, and reproducibility. Depending on your operating system configuration, you may prefer to create a Python environment using `venv`, `virtualenv`, Conda, or a similar tool. You must activate this environment to run the WhisperLive server.
 
 ---
 
@@ -724,3 +724,25 @@ Current and planned approaches include:
 - **Improving Text Formatting and Post-Processing (partially implemented and currently used together with the transcription dynamics approach)**  
   Basic formatting rules could be applied, such as inserting line breaks or punctuation based on simple patterns.  
   A lightweight post-processing stage could also help correct common transcription artifacts. Heuristic rules may improve local coherence by detecting repeated or inconsistent word sequences and adjusting them using nearby context, provided the processing remains efficient enough for real-time operation.
+
+---
+
+## Licensing and Attribution
+
+This repository is distributed under **GPL-3.0-or-later**. The full license text is provided in the `LICENSE` file included at the repository root.
+
+### Third-party code
+
+The file `run_server.py` in this repository is based in part on the upstream `run_server.py` example from [collabora/WhisperLive](https://github.com/collabora/WhisperLive), whose upstream project is distributed under the **MIT License**. Because this repository adapts and redistributes that upstream material, the repository preserves the relevant upstream attribution notice in the file header and in `THIRD_PARTY_NOTICES.md`.
+
+The file `WhisperLive_server.sh` is an original launcher/orchestration script distributed under GPL-3.0-or-later as part of this repository.
+
+### What you should keep in the repository
+
+- `LICENSE` — full GPL-3.0 text for the repository.
+- `THIRD_PARTY_NOTICES.md` — upstream attribution for MIT-licensed code included or adapted here.
+- File headers in `run_server.py` and `WhisperLive_server.sh` — short copyright and license notices.
+
+### Practical note
+
+You do **not** need to replace the repository GPL license with the MIT license. Instead, keep the GPL `LICENSE` file already present in the repository and add a separate notice file for third-party attributions. That is the cleanest approach for this project structure.
