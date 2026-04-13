@@ -2,13 +2,18 @@
 
 This repository contains original code and also includes material derived in part from the WhisperLive project by Collabora.
 
-## Upstream component
+## Upstream project
 
 **Project:** collabora/WhisperLive
 **Repository:** https://github.com/collabora/WhisperLive
 **Upstream license:** MIT License
 
-**Relevant derived file in this repository:** `run_server.py`
+## Upstream-derived material in this repository
+
+This repository includes material derived in part from the upstream WhisperLive project, including:
+
+- `run_server.py`
+- browser extension source files derived or adapted from the upstream WhisperLive browser extension components
 
 **Upstream copyright notice:**
 
@@ -42,4 +47,5 @@ SOFTWARE.
 
 This repository, as distributed here, is licensed under GPL-3.0-or-later; see the `LICENSE` file at the repository root.
 
-The purpose of this file is to preserve the copyright and license notice required for the upstream MIT-licensed material incorporated into `run_server.py`.
+This file preserves the copyright and license notice required for upstream
+MIT-licensed material incorporated into this repository.

@@ -1,3 +1,23 @@
+/*
+ * audio-processor.js — part of Audio Transcription
+ * Copyright (C) 2026 Antonio Ruiz
+ *
+ * This file is part of Audio Transcription.
+ *
+ * Audio Transcription is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Audio Transcription is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Audio Transcription. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // AudioWorklet processor for audio capture.
 // Replaces the deprecated ScriptProcessorNode (createScriptProcessor).
 // This file must be registered via AudioContext.audioWorklet.addModule().

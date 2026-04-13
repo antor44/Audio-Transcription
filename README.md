@@ -735,11 +735,16 @@ This repository is distributed under **GPL-3.0-or-later**. The full license text
 
 ### Third-party code
 
-The file `run_server.py` is based in part on the upstream `run_server.py` example from [collabora/WhisperLive](https://github.com/collabora/WhisperLive). The upstream WhisperLive project is distributed under the **MIT License**.
+This repository includes material derived in part from the WhisperLive project by Collabora.
 
-Accordingly, this repository preserves the relevant upstream copyright and MIT license notice for the upstream-derived material:
+The file `run_server.py` is based in part on the upstream `run_server.py` example from [collabora/WhisperLive](https://github.com/collabora/WhisperLive).
 
-- in the header of `run_server.py`, and
+The browser extension included in this repository also contains source files derived or adapted in part from the upstream WhisperLive browser extension components.
+
+The upstream WhisperLive project is distributed under the **MIT License**. Accordingly, this repository preserves the relevant upstream copyright and MIT license notice for upstream-derived material:
+
+- in the header of `run_server.py`,
+- in the headers of relevant browser extension source files, and
 - in `THIRD_PARTY_NOTICES.md`.
 
 The file `WhisperLive_server.sh` is an original launcher/orchestration script distributed as part of this repository under **GPL-3.0-or-later**.
@@ -750,10 +755,10 @@ The repository includes the following licensing and attribution files:
 
 - `LICENSE` — full GPL-3.0 text for this repository.
 - `THIRD_PARTY_NOTICES.md` — preserved copyright and MIT license notice for upstream code included or adapted here.
-- File headers in `run_server.py` and `WhisperLive_server.sh` — short copyright and license notices.
+- File headers in source files — short copyright and license notices.
 
 ### Relationship between the licenses
 
-The repository-wide GPL-3.0-or-later license is not replaced by the upstream MIT license. Instead, the repository is distributed under GPL-3.0-or-later while preserving the required MIT copyright and permission notice for the upstream material incorporated into `run_server.py`.
+The repository-wide GPL-3.0-or-later license is not replaced by the upstream MIT license. Instead, the repository is distributed under GPL-3.0-or-later while preserving the required MIT copyright and permission notice for the upstream material incorporated into the project.
 
 This structure reflects the licensing of the repository as distributed here together with the preserved notices required for the upstream MIT-licensed material.
