@@ -212,6 +212,30 @@ def apply_beam_size_patch(beam_size: int) -> bool:
 
 
 # =============================================================================
+# CUDA detection helper
+# =============================================================================
+
+def _detect_cuda() -> bool:
+    """Return True if a usable CUDA device is actually available."""
+    if os.environ.get("CUDA_VISIBLE_DEVICES") == "":
+        return False
+    # ctranslate2 is always present when faster-whisper is installed
+    try:
+        import ctranslate2
+        types = ctranslate2.get_supported_compute_types("cuda")
+        return bool(types)
+    except Exception:
+        pass
+    # Fallback: torch (may not be installed)
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        pass
+    return False
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -364,9 +388,16 @@ def main():
 
     if args.backend == "faster_whisper":
         if args.device == "cpu" or os.environ.get("CUDA_VISIBLE_DEVICES") == "":
-            logger.info("Using Device=cpu with precision float32")
-        else:
+            _effective_device = "cpu"
+        elif args.device == "cuda":
+            _effective_device = "cuda"
+        else:  # auto
+            _effective_device = "cuda" if _detect_cuda() else "cpu"
+
+        if _effective_device == "cuda":
             logger.info("Using Device=cuda with precision float16")
+        else:
+            logger.info("Using Device=cpu with precision int8")
 
     logger.info(
         "Server ready → host=%s  port=%d  backend=%s  "
@@ -386,6 +417,7 @@ def main():
         host=args.host,
         port=args.port,
         backend=args.backend,
+        device=args.device,
         faster_whisper_custom_model_path=args.faster_whisper_custom_model_path,
         whisper_tensorrt_path=args.trt_model_path,
         trt_multilingual=args.trt_multilingual,
@@ -428,7 +460,7 @@ def main():
     # Warn only about parameters that are truly unsupported (not limits,
     # which are handled above via fallback)
     truly_ignored = [k for k in rejected_keys
-                     if k not in ("max_clients", "max_connection_time")]
+                     if k not in ("max_clients", "max_connection_time", "device")]
     if truly_ignored:
         logger.warning(
             "The following parameters are not supported by the installed "

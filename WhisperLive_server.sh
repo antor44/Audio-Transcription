@@ -97,6 +97,7 @@ PORT="9090"
 MAX_CLIENTS="100"
 MAX_CONNECTION_TIME="604800"
 OMP_THREADS="1"
+USER_THREADS=""        # set by --threads; empty = use auto-calculation
 
 # Replace with your published image name once available:
 #   ghcr.io/yourusername/whisperlive-universal:latest
@@ -146,6 +147,7 @@ while [[ $# -gt 0 ]]; do
         --port)         PORT="$2";   shift 2 ;;
         --host)         HOST="$2";   shift 2 ;;
         --multilingual) TRT_MULTILINGUAL="--trt_multilingual"; shift ;;
+        --threads)      USER_THREADS="$2"; shift 2 ;;
         --help|-h)      show_help ;;
         *)              shift ;;
     esac
@@ -358,9 +360,39 @@ if [ "$MODE" = "docker" ]; then
 # =============================================================================
 else
     log_sep
+
+    # -- Detect CUDA availability in bash (mirrors _detect_cuda() in run_server.py)
+    _bash_has_cuda() {
+        [ "${CUDA_VISIBLE_DEVICES:-unset}" = "" ] && return 1
+        command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null 2>&1 && return 0
+        return 1
+    }
+
+    # -- Resolve effective device for thread calculation in auto mode ----------
     if [ "$FORCE_CPU" = "1" ]; then
-        # In CPU mode, use half the available cores (min 2, max 8)
-        CPU_THREADS="$(( $(nproc) / 2 < 2 ? 2 : $(nproc) / 2 > 8 ? 8 : $(nproc) / 2 ))"
+        _EFFECTIVE_CPU=1
+    else
+        _bash_has_cuda && _EFFECTIVE_CPU=0 || _EFFECTIVE_CPU=1
+    fi
+
+    # -- Resolve thread count --------------------------------------------------
+    if [ -n "$USER_THREADS" ]; then
+        if [ "$USER_THREADS" = "0" ]; then
+            FINAL_THREADS="$(nproc)"
+            log_info "CPU threads: ${FINAL_THREADS} (all cores)"
+        else
+            FINAL_THREADS="$USER_THREADS"
+            log_info "CPU threads: ${FINAL_THREADS} (user-specified)"
+        fi
+    elif [ "$_EFFECTIVE_CPU" = "1" ]; then
+        # No CUDA available: default to half the available cores (min 2, max 8)
+        FINAL_THREADS="$(( $(nproc) / 2 < 2 ? 2 : $(nproc) / 2 > 8 ? 8 : $(nproc) / 2 ))"
+        log_info "CPU threads: ${FINAL_THREADS} of $(nproc) available (default: half)"
+    else
+        FINAL_THREADS="$OMP_THREADS"
+    fi
+
+    if [ "$FORCE_CPU" = "1" ]; then
         log_server "WhisperLive — local server (faster-whisper)  [CPU ONLY]"
         export CUDA_VISIBLE_DEVICES=""
         python3 run_server.py \
@@ -370,7 +402,7 @@ else
             --device          cpu \
             --max_clients     "$MAX_CLIENTS" \
             --max_connection_time "$MAX_CONNECTION_TIME" \
-            --omp_num_threads "$CPU_THREADS"
+            --omp_num_threads "$FINAL_THREADS"
     else
         log_server "WhisperLive — local server (faster-whisper)"
         python3 run_server.py \
@@ -379,7 +411,7 @@ else
             --backend         faster_whisper \
             --max_clients     "$MAX_CLIENTS" \
             --max_connection_time "$MAX_CONNECTION_TIME" \
-            --omp_num_threads "$OMP_THREADS"
+            --omp_num_threads "$FINAL_THREADS"
     fi
     echo ""
 fi
