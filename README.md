@@ -488,7 +488,13 @@ In short, this `run_server.py` is mostly a smarter command‑line interface and 
           --max_connection_time "$MAX_CONNECTION_TIME" \
           --omp_num_threads "$CPU_THREADS"
         ```
-    Here, `CPU_THREADS` is chosen conservatively based on the number of available cores (e.g., half the cores, clamped to a safe range), so CPU‑only mode works reasonably well on a wide variety of machines.
+
+        The number of CPU threads defaults to half the available cores (minimum 2, maximum 8), which is a safe conservative value across a wide variety of machines. You can override it with `--threads N` (`0` means use all cores):
+
+        ```bash
+        ./WhisperLive_server.sh cpu --threads 4
+        ./WhisperLive_server.sh cpu --threads 0   # all cores
+        ```
 
 *   **Docker mode orchestration:**
     For Docker, the script:
