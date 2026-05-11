@@ -1,60 +1,63 @@
-# Audio Transcription for Chrome/Chromium/Microsoft Edge (v2.8.6)
+# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.0.0)
 
-A browser extension (Chrome/Chromium/Edge) that captures tab audio and transcribes it in real-time using a local WhisperLive server, a highly optimized implementation of OpenAI's Whisper. Compatible with Linux, Windows, and macOS, this extension acts as a true **Live Interpreter**. It features live translation and Text-to-Speech (TTS) playback of the transcribed or translated text on the fly. It works with any audio or video stream, completely independent of whether the source has pre-existing subtitles.
+A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-time interpreter. It captures any audio playing in a tab (transcribing it via a local Whisper AI server) **or reads existing video subtitles**, translates them live, and reads the results back to you via Text-to-Speech (TTS) on the fly. Compatible with Linux, Windows, and macOS, this extension acts as a true **Live Interpreter** for any media stream.
 
 ## Using the Extension
 
-### 1. Prepare the Server
-Ensure that your local [WhisperLive](https://github.com/collabora/WhisperLive) server is running. (See installation instructions below).
+### 1. Prepare the Server (If needed)
+Ensure that your local [WhisperLive](https://github.com/collabora/WhisperLive) server is running. 
+> [!NOTE]
+> The local server is **ONLY required** if you intend to use the **WhisperLive** tab for live audio transcription. The **Subtitle TTS** tab works completely out-of-the-box without any server.
 
-### 2. Play Audio
-Play any audio or video on a webpage.
+### 2. Play Media
+Play any audio or video on a webpage. (If using the Subtitle TTS mode, ensure the video's native subtitles/CC are enabled).
 
 ### 3. Open the Extension
-Click the extension icon in your browser toolbar to open the options popup.
+Click the extension icon in your browser toolbar to open the options popup. You will notice the UI is divided into two main tabs:
 
-### 4. Configure Your Options
-The UI is divided into several sections to give you full control over transcription and translation:
+---
 
-#### General Settings
-- **Speech (TTS) Speed & Enable TTS:** Enable Text-to-Speech to have the extension read the text aloud in real-time. If translation is active, it reads the translated text; otherwise, it reads the original Whisper transcription (using the selected Audio Language, or English if Whisper's task is set to "Translate"). You can also adjust the reading speed.
+### 🎬 TAB 1: Subtitle TTS Mode (No Server Required)
+This mode reads video subtitles aloud and translates them on the fly. It works with YouTube, Twitch (CC), and any HTML5 video that provides subtitle tracks.
 
-> [!NOTE]
-> **How TTS works on different OS:** This feature uses the `chrome.tts` extension API.
-> - **Windows:** Uses the voices installed via SAPI 5 (configured in your OS).
-> - **macOS:** Uses the native macOS speech voices.
-> - **Linux:** 
->   - *Google Chrome* bundles its own internal eSpeak-NG engine (fixed quality, limited language support).
->   - *Microsoft Edge* uses Microsoft's online Neural TTS voices (high quality, broad language support, requires internet).
->   - *Chromium* has no built-in engine. It will only work if a TTS engine extension (like Piper) is installed; otherwise, no audio will be produced.
+- **Hide Original YouTube Subtitles:** Automatically hides the native captions on the video player so they don't overlap with the extension's UI.
+- **Display Mode:** Choose to view the "Original Only", "Translation Only", or "Side by Side".
+- **Show in Standalone Window:** Display the text in a dedicated, resizable popup window instead of an in-page overlay.
+- **Video During TTS (Playback Control):** 
+  - *Pause video:* Automatically pauses the video while the TTS is speaking to prevent overlapping audio.
+  - *Slow down video:* Reduces the video playback speed while the TTS is speaking.
+  - *No control:* The video continues playing normally.
+- **Original Video Volume:** Control the volume of the background video (e.g., lower it to 20% so you can hear the TTS voice clearly over the original audio).
+- **TTS Speed & Enable Speech:** Adjust the reading speed and toggle the Text-to-Speech voice on or off.
 
-- **Show in Standalone Window:** Choose whether to display the text in a floating overlay within the webpage or in a dedicated, resizable standalone popup window. The standalone mode supports additional online services, such as video conferences, audio podcasts, or even local video and audio files played directly in the browser (only for files with audio and video codecs supported by the browser).
-- **Voice Activity Detection (VAD):** Enable this to stop processing audio during silent periods, saving CPU/GPU resources.
+---
 
-#### WhisperLive Server
-- Enter a custom server IP address and port to connect to your transcription server (default is `localhost` and `9090`).
-- Click **Reset Default** to revert the IP address and port to local settings (`localhost:9090`). Other settings are preserved.
+### 📡 TAB 2: WhisperLive Mode (Requires Local Server)
+This mode captures the raw audio from the tab and transcribes it from scratch using OpenAI's Whisper AI.
 
-#### Transcription Settings
+- **Server Connection:** Enter a custom server IP address and port (default is `localhost` and `9090`). Click **Reset Default** to revert to local settings.
 - **Audio Language:** Select the source language of the audio, or leave it on "Auto Detect".
   *Tip: If you select a language different from the one spoken in the audio, larger Whisper models (like large-v2 or large-v3) will often provide a very good direct translation into the selected language natively, without needing external translation features.*
 - **Whisper Task:** Choose between "Transcribe" (text in the original language) or "Translate" (direct Whisper translation to English).
 - **Model Size:** Pick the model size that suits your system’s hardware (from Base to Large-v3).
 - **Text Formatting:** Choose from "Raw Segments", "Joined Text", or "Advanced Paragraphs" to make the output more readable.
 - **Transcription Profile:** Choose between three performance profiles that control how quickly text is stabilized, committed, and sent for translation/TTS:
-  - *Accurate:* Conservative mode with more lag. Waits for more context before committing text, producing cleaner and more complete sentences. Recommended for high-quality transcriptions where latency is not critical.
+  - *Accurate:* Conservative mode with more lag. Waits for more context before committing text, producing cleaner and more complete sentences.
   - *Balanced:* The default behavior. A middle ground between speed and accuracy.
-  - *Low Lag:* Aggressive mode that commits text as fast as possible. Text appears and stabilizes quickly, and translations/TTS trigger sooner. Best for real-time scenarios where minimal delay is prioritized over perfect sentence structure.
-- **Hide Live Text:** When enabled, the unstable live preview text (shown in gray/italics) is hidden. Only stable, committed text (white) and translations are displayed. Useful if the constantly changing preview text is distracting.
+  - *Low Lag:* Aggressive mode that commits text as fast as possible. Text appears and stabilizes quickly. Best for real-time scenarios where minimal delay is prioritized.
+- **Hide Live Text:** When enabled, the unstable live preview text (shown in gray/italics) is hidden. Only stable, committed text (white) and translations are displayed.
 
 *(All transcription profile and hide live text changes take effect in real time — no need to restart the capture).*
 
-#### Gemini & Google Translation
+---
+
+### 🌐 AI Translation (Shared Settings)
+Both tabs support real-time translation using advanced AI models:
+
 - **Enable Translation:** Check this to activate real-time translation.
 - **Gemini API Key:** If you intend to use a Gemini model, paste your Google Gemini API key here (you can get one for free from Google AI Studio).
-- **Translation Model (Free Option Available):** Select your desired engine. You can choose **Google Translate** for completely free translations without an API key, or select a Gemini model (e.g., `gemini-3-flash-preview`). 👉 **Automatic Fallback:** If you select a Gemini model and the API fails, times out, or throws an error, the extension will automatically use the free Google Translate as a fallback. Translations produced by this fallback are marked with a `⁺` (U+207A) symbol at the beginning of the text.
+- **Translation Engine:** Select your desired engine. You can choose **Google Translate** for completely free translations without an API key, or select a Gemini model (e.g., `gemini-3-flash-preview`). 👉 **Automatic Fallback:** If you select a Gemini model and the API fails, times out, or throws an error, the extension will automatically use the free Google Translate as a fallback. Translations produced by this fallback are marked with a `⁺` (U+207A) symbol at the beginning of the text.
 - **Target Language:** Select the language you want to translate the text into.
-- **Display Mode:** Choose how to view the text ("Original Only", "Translation Only", or "Side by Side").
 
 > [!IMPORTANT]
 > **Note on Gemini Models & Pricing:**
@@ -67,17 +70,25 @@ The UI is divided into several sections to give you full control over transcript
 
   *Note: Google plans to discontinue Gemini 2.5 Pro and Flash 2.5 models on June 17, 2026.*
 
-### 5. Start Transcription
-Click **Start Capture** to begin capturing audio and sending it to the server. The first time a model is selected, the necessary files will be downloaded automatically. You can monitor active settings and connection status in the real-time status bar at the top of the transcription window.
+---
 
-### 6. Window Customization & History
+> [!NOTE]
+> **How TTS works on different OS:** This feature uses the `chrome.tts` extension API.
+> - **Windows:** Uses the voices installed via SAPI 5 (configured in your OS).
+> - **macOS:** Uses the native macOS speech voices.
+> - **Linux:** 
+>   - *Google Chrome* bundles its own internal eSpeak-NG engine (fixed quality, limited language support).
+>   - *Microsoft Edge* uses Microsoft's online Neural TTS voices (high quality, broad language support, requires internet).
+>   - *Chromium* has no built-in engine. It will only work if a TTS engine extension (like Piper) is installed; otherwise, no audio will be produced.
+
+### Start Processing
+Click **Start Subtitle TTS** (on Tab 1) or **Start Capture** (on Tab 2) to begin. You can monitor active settings and connection status in the real-time status bar at the top of the transcription window.
+
+### Window Customization & History
 The transcription windows (both in-page overlay and standalone) give you full control:
 - You can freely move and resize the windows to fit your layout.
 - You can increase or decrease the font size of the text.
 - All processed text is saved in a continuous history, and you can easily copy the entire transcript (both original and translated) to your clipboard with a single click.
-
-### 7. Stop Transcription
-Click **Stop Capture** to end the session.
 
 ---
 
@@ -381,7 +392,7 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 
 ## Screenshots
 
-![Screenshot 1](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension1.jpg)
+![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension8.jpg)
 
 ![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension2.jpg)
 
@@ -394,6 +405,8 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 ![Screenshot 2](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension6.jpg)
 
 ![Screenshot 3](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension7.jpg)
+
+![Screenshot 1](https://github.com/antor44/Audio-Transcription/raw/main/Chrome_extension1.jpg)
 
 ---
 
