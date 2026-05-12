@@ -14,6 +14,12 @@ Ensure that your local [WhisperLive](https://github.com/collabora/WhisperLive) s
 ### 2. Play Media
 Play any audio or video on a webpage. (If using the Subtitle TTS mode, ensure the video's native subtitles/CC are enabled).
 
+> [!TIP]
+> **Dynamic Subtitle Language Processing:** 
+> In **Subtitle TTS** mode, you can select **any** subtitle language available on the video player. The extension will automatically detect and process it based on your preferences:
+> - **Direct Playback (No Translation):** If translation is disabled, the extension will read the subtitles aloud (TTS) directly in their original language.
+> - **Translation Mode:** If translation is enabled, the extension will process and translate the subtitles on the fly from their original language into your selected target language, and then read the translation aloud.
+> - **Grammar Correction Mode:** If you select the same language for both the source subtitles and your target translation (e.g., source English CC translated to target English), the extension will still send the text to the selected translation engine (like Google Gemini). This process **attempts to fix common grammar, spelling, and punctuation errors** from auto-generated subtitles before reading the text aloud.
 ### 3. Open the Extension
 Click the extension icon in your browser toolbar to open the options popup. You will notice the UI is divided into two main tabs:
 
