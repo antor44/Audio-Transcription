@@ -46,6 +46,8 @@ This mode captures the raw audio from the tab and transcribes it from scratch us
   - *Balanced:* The default behavior. A middle ground between speed and accuracy.
   - *Low Lag:* Aggressive mode that commits text as fast as possible. Text appears and stabilizes quickly. Best for real-time scenarios where minimal delay is prioritized.
 - **Hide Live Text:** When enabled, the unstable live preview text (shown in gray/italics) is hidden. Only stable, committed text (white) and translations are displayed.
+- **Show in Standalone Window:** Choose whether to display the text in a floating overlay within the webpage or in a dedicated, resizable standalone popup window. The standalone mode supports additional online services, such as video conferences, audio podcasts, or even local video and audio files played directly in the browser (only for files with audio and video codecs supported by the browser).
+- **Voice Activity Detection (VAD):** Enable this to stop processing audio during silent periods, saving CPU/GPU resources.
 
 *(All transcription profile and hide live text changes take effect in real time — no need to restart the capture).*
 
