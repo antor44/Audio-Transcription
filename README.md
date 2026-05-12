@@ -20,6 +20,10 @@ Play any audio or video on a webpage. (If using the Subtitle TTS mode, ensure th
 > - **Direct Playback (No Translation):** If translation is disabled, the extension will read the subtitles aloud (TTS) directly in their original language.
 > - **Translation Mode:** If translation is enabled, the extension will process and translate the subtitles on the fly from their original language into your selected target language, and then read the translation aloud.
 > - **Grammar Correction Mode:** If you select the same language for both the source subtitles and your target translation (e.g., source English CC translated to target English), the extension will still send the text to the selected translation engine (like Google Gemini). This process **attempts to fix common grammar, spelling, and punctuation errors** from auto-generated subtitles before reading the text aloud.
+
+> [!NOTE]
+> **A Note on Language Auto-Detection:** The extension performs its own **language auto-detection** on the subtitles, since many video players do not correctly report the language of the subtitle track. This detection process can occasionally lead to initial errors, such as selecting the wrong TTS voice for the first few sentences or causing translation inaccuracies. In rare cases, this initial mismatch can cause the process to stall. If this occurs, the most reliable solution is to **reload the video page and restart the extension**.
+
 ### 3. Open the Extension
 Click the extension icon in your browser toolbar to open the options popup. You will notice the UI is divided into two main tabs:
 
