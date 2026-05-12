@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Audio Transcription & Live Interpreter",
-  "version": "2.8.6",
-  "description": "Real-time transcription, live translation, and speech-to-speech playback for any audio playing in your browser.",
+  "version": "3.0.0",
+  "description": "Real-time transcription, live translation, and speech-to-speech playback for browser audio. Includes Subtitle TTS for videos.",
   "options_page": "options.html",
   "background": {
     "service_worker": "background.js",

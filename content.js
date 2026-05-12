@@ -88,8 +88,44 @@ if (window.__audioTranscriptionOverlayApi) {
     let enableTts = false;
     let dedupTail = [];
     let hideLiveText = false;
+    let isSubtitleMode = false;
+    let isStandaloneHidden = false;
+    let currentTrackLang = "";
+    let subtitleOriginalHistory = [];
+    let subtitleTranslatedHistory = [];
+    let subtitleVideoVolume = 1.0;
+    const originalVideoVolumes = new Map();
 
-    // --- Transcription Profile Configs ---
+    function applyVideoVolume(force = false) {
+      try {
+        document.querySelectorAll('video').forEach(v => {
+          if (v.offsetWidth > 0) {
+            let isNew = false;
+            if (!originalVideoVolumes.has(v)) {
+              originalVideoVolumes.set(v, v.volume);
+              isNew = true;
+            }
+            if (force || isNew) {
+              v.volume = Math.max(0, Math.min(1, subtitleVideoVolume));
+            }
+          }
+        });
+      } catch(e) {}
+    }
+
+    function restoreVideoVolume() {
+      try {
+        document.querySelectorAll('video').forEach(v => {
+          if (originalVideoVolumes.has(v)) {
+            v.volume = originalVideoVolumes.get(v);
+            originalVideoVolumes.delete(v);
+          }
+        });
+      } catch(e) {}
+      originalVideoVolumes.clear();
+    }
+
+    // Transcription Profile Configs
     const PROFILES = {
       accurate: {
         stableWordCount: 15,
@@ -158,45 +194,16 @@ if (window.__audioTranscriptionOverlayApi) {
     }
     const debouncedSaveWindowStyle = debounce(saveWindowStyle, 200);
 
-    // ---------------------------------------------------------------------------
-    // Script-aware utilities
-    // ---------------------------------------------------------------------------
-    // Scripts that do not delimit words with spaces:
-    //   U+3040-9FFF  Hiragana, Katakana, CJK Unified Ideographs (Japanese/Chinese)
-    //   U+F900-FAFF  CJK Compatibility Ideographs
-    //   U+0E00-0E7F  Thai
-    //   U+1000-109F  Myanmar (Burmese)
-    //   U+1780-17FF  Khmer
-    // Korean Hangul (U+AC00-D7AF) is excluded — Korean uses spaces between words.
     const SPACELESS_RE = /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0E7F\u1000-\u109F\u1780-\u17FF]/;
 
     function isSpacelessScript(text) {
       return SPACELESS_RE.test(text);
     }
 
-    // Sentence-ending / phrase-ending punctuation for all supported scripts.
-    // Used in splitIntoFlushableChunks and queueTranslation.
-    //   ASCII              .  !  ?  … (U+2026)
-    //   CJK                。(U+3002)  ！(FF01)  ？(FF1F)  、(3001 – phrase break)
-    //   Arabic full-stop   ؟ (U+061F)
-    //   Arabic comma       ، (U+060C)  ← very common phrase separator in transcribed Arabic
-    //   Arabic semicolon   ؛ (U+061B)
-    //   Devanagari/Hindi   । (U+0964)  ॥ (U+0965)
-    //   Myanmar            ။ (U+104B)  ၊ (U+104A)
-    //   Khmer              ។ (U+17D4)
-    //   Ethiopian          ። (U+1362)
-    //   Armenian           ։ (U+0589)
     const SENTENCE_END_CHARS =
       ".!?\u2026\u3002\uFF01\uFF1F\u3001\u061F\u060C\u061B\u0964\u0965\u104A\u104B\u17D4\u1362\u0589";
     const SENTENCE_END_RE = new RegExp("[" + SENTENCE_END_CHARS + "]");
 
-    // Returns a word-equivalent count for any script:
-    //   - Space-separated scripts (Latin, Arabic, Hebrew, Devanagari, Korean…):
-    //     whitespace-delimited token count — identical to the original behaviour.
-    //   - Spaceless scripts (CJK, Thai, Burmese, Khmer): each character counts as
-    //     one unit because there are no word-delimiting spaces.
-    // The character count is used only when spaceless chars dominate the text,
-    // so a Latin sentence with a few CJK chars is still counted by words.
     function countWords(text) {
       const t = normalizeText(text);
       if (!t) return 0;
@@ -313,7 +320,6 @@ if (window.__audioTranscriptionOverlayApi) {
       const chunks = [];
       if (!rest) return { chunks, remainder: "" };
 
-      // Sentence boundary regex covering ASCII and all supported script punctuation.
       const sentenceRegex = new RegExp(
         "[^" + SENTENCE_END_CHARS + "]+" +
         "[" + SENTENCE_END_CHARS + "]+(?:[\"')\\]]+)?",
@@ -331,14 +337,12 @@ if (window.__audioTranscriptionOverlayApi) {
       rest = normalizeText(rest.slice(consumedLength));
 
       if (isSpacelessScript(rest)) {
-        // No word spaces — chunk by character count (~20 chars ≈ one short phrase).
         const CHARS_PER_CHUNK = 20;
         while (rest.length >= CHARS_PER_CHUNK) {
           chunks.push(rest.slice(0, CHARS_PER_CHUNK));
           rest = rest.slice(CHARS_PER_CHUNK).replace(/^\s+/, "");
         }
       } else {
-        // Space-separated scripts: chunk by word count (original behaviour).
         const words = rest.split(/\s+/).filter(Boolean);
         while (words.length >= 10) {
           const piece = normalizeText(words.splice(0, 10).join(" "));
@@ -384,7 +388,7 @@ if (window.__audioTranscriptionOverlayApi) {
       try { chrome.runtime.sendMessage({ action: "resetTranslationContext" }); } catch (e) {}
     }
 
-    function resetRuntimeState() {
+    function resetRuntimeState(isSubMode = false) {
       segments = [];
       previousSegments = [];
       dedupTail = historyChunks.slice(-40);
@@ -402,15 +406,16 @@ if (window.__audioTranscriptionOverlayApi) {
       if (statusClearTimer) { clearTimeout(statusClearTimer); statusClearTimer = null; }
       window.__transcriptionStatusText = "";
       resetTranslationContext();
+      subtitleOriginalHistory = [];
+      subtitleTranslatedHistory = [];
+      isSubtitleMode = !!isSubMode;
+      currentTrackLang = "";
     }
 
     function queueTranslation(text) {
       if (!enableGeminiTranslation) return;
 
       const cleanText = removeInternalRepetitions(normalizeText(text));
-      // Allow single-word items into the queue so Arabic single-word residuals
-      // (after rolling-window dedup) still contribute to the word count that
-      // triggers the translation dispatch threshold.
       if (!cleanText) return;
 
       if (translationQueue.length === 0) {
@@ -421,17 +426,6 @@ if (window.__audioTranscriptionOverlayApi) {
         const newPartWords   = countWords(newPart);
         const cleanTextWords = countWords(cleanText);
 
-        // Replace the last queue item ONLY when the incoming text is almost
-        // entirely a repeat of what is already queued (genuine rolling-window
-        // update with fewer than 2 new word-equivalents added).
-        //
-        // The previous threshold was:
-        //   stripPunctuation(newPart).length < stripPunctuation(cleanText).length * 0.95
-        // This fired on any overlap > 5% of source characters.  For Arabic
-        // rolling-window commits that share 30–60% of words with the previous
-        // commit this caused the queue to be perpetually replaced instead of
-        // accumulated, keeping the total below the 16-word fire threshold so
-        // translation never triggered.
         if (newPartWords < 2 && newPartWords < cleanTextWords) {
           translationQueue[translationQueue.length - 1] = cleanText;
         } else {
@@ -440,9 +434,7 @@ if (window.__audioTranscriptionOverlayApi) {
       }
 
       const queued    = translationQueue.join(" ");
-      // countWords() so CJK character count reaches the numeric threshold.
       const wordCount = countWords(queued);
-      // SENTENCE_END_RE covers all scripts, including Arabic ، and ؟.
       const hasSentenceBoundary = SENTENCE_END_RE.test(queued);
 
       if (
@@ -457,12 +449,6 @@ if (window.__audioTranscriptionOverlayApi) {
     function processTranslationQueue() {
       if (isTranslatingLocal || translationQueue.length === 0) return;
 
-      // Cap source text per API call to prevent output-token truncation.
-      // While a call is in-flight (isTranslatingLocal = true) new segments keep
-      // queuing.  Sending all accumulated items at once can produce a source text
-      // that exceeds the model output-token budget, causing silent mid-sentence
-      // truncation.  ~400 source characters → ≤ ~600 output tokens for any pair,
-      // well within maxOutputTokens: 1024.  Leftovers fire immediately after.
       const MAX_SOURCE_CHARS = 400;
       let text = "";
       let consumed = 0;
@@ -476,8 +462,6 @@ if (window.__audioTranscriptionOverlayApi) {
       translationQueue.splice(0, consumed);
       isTranslatingLocal = true;
 
-      // Build context tail from recent translated output.
-      // For spaceless-script output, split(/\s+/) is useless — use raw chars.
       const recentTranslated = translatedChunks.slice(-3).join(" ");
       let shownTail;
       if (isSpacelessScript(recentTranslated)) {
@@ -494,7 +478,6 @@ if (window.__audioTranscriptionOverlayApi) {
           if (response.data) {
             addTranslatedChunk(response.data);
           }
-          // Show the actual Gemini API error when it fell back to Google Translate.
           if (response.geminiError) {
             updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
           } else {
@@ -555,10 +538,6 @@ if (window.__audioTranscriptionOverlayApi) {
       const lastChunks = allHistory.slice(-6).join(" ");
       if (calculateTextSimilarity(lastChunks, deduped) > 0.80) return;
 
-      // countWords() for the short-text guard: for spaceless scripts (CJK, Thai…)
-      // split(/\s+/) returns the whole sentence as one token, so every chunk
-      // would pass the <= 5 test and be subjected to the aggressive includes()
-      // check, silently dropping valid new source text.
       if (countWords(deduped) <= 5) {
         const dedupedStripped = stripPunctuation(deduped);
         const recentHistoryStripped = stripPunctuation(allHistory.slice(-50).join(" "));
@@ -615,8 +594,6 @@ if (window.__audioTranscriptionOverlayApi) {
 
       const P = activeProfile;
       const currentWindowText = getCurrentWindowText(newSegments);
-      // countWords() uses character count for spaceless scripts so stableWordCount
-      // is reachable even when there are no word-delimiting spaces.
       const wordCount = countWords(currentWindowText);
       const elapsed   = Date.now() - windowStartTime;
       const isStable  = wordCount >= P.stableWordCount || elapsed >= P.stableElapsed || newSegments.length >= P.stableSegments;
@@ -711,20 +688,29 @@ if (window.__audioTranscriptionOverlayApi) {
         mainWrapperEl.style.overflow      = "hidden";
       }
 
-      const hasTranslation = translatedChunks.length > 0;
-      const showTranslation = (enableGeminiTranslation || hasTranslation) &&
-        (currentDisplayMode === "translation" || currentDisplayMode === "both");
-      const showOriginal = currentDisplayMode === "original" || currentDisplayMode === "both" || !showTranslation;
+      transcriptionOriginalEl.style.overflowY = "auto";
+      transcriptionTranslatedEl.style.overflowY = "auto";
 
-      if (showOriginal && !showTranslation) {
-        transcriptionOriginalEl.style.display = "flex";
+      const hasTransHistory = isSubtitleMode ? subtitleTranslatedHistory.length > 0 : translatedChunks.length > 0;
+      const isTransActive = enableGeminiTranslation || hasTransHistory;
+
+      let showOrig = currentDisplayMode === "original" || currentDisplayMode === "both";
+      let showTrans = currentDisplayMode === "translation" || currentDisplayMode === "both";
+
+      if (showTrans && !isTransActive) {
+        showOrig = true;
+        showTrans = false;
+      }
+
+      if (showOrig && !showTrans) {
+        transcriptionOriginalEl.style.display = "block";
         transcriptionOriginalEl.style.flex = "1 1 0%";
         transcriptionTranslatedEl.style.display = "none";
         dividerEl.style.display = "none";
-      } else if (!showOriginal && showTranslation) {
+      } else if (!showOrig && showTrans) {
         transcriptionOriginalEl.style.display = "none";
         dividerEl.style.display = "none";
-        transcriptionTranslatedEl.style.display = "flex";
+        transcriptionTranslatedEl.style.display = "block";
         transcriptionTranslatedEl.style.flex = "1 1 0%";
       } else {
         transcriptionOriginalEl.style.display = "block";
@@ -745,6 +731,33 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function renderText() {
+      if (isSubtitleMode) {
+        applyDisplayMode();
+        
+        if (transcriptionOriginalEl) {
+          const allOrig = subtitleOriginalHistory;
+          const histHtml = allOrig.slice(0, -1)
+            .map(t => `<span style="opacity:0.55">${escapeHtml(t)}</span>`).join('<br>');
+          const lastHtml = allOrig.length
+            ? `<span style="color:#fff;font-weight:600">${escapeHtml(allOrig[allOrig.length-1])}</span>`
+            : '';
+          transcriptionOriginalEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histHtml}${histHtml && lastHtml ? '<br>' : ''}${lastHtml}</span>`;
+          transcriptionOriginalEl.scrollTop = transcriptionOriginalEl.scrollHeight;
+        }
+
+        if (transcriptionTranslatedEl) {
+          const allTrans = subtitleTranslatedHistory;
+          const histTransHtml = allTrans.slice(0, -1)
+            .map(t => `<span style="opacity:0.55;color:#a7f3d0;font-style:italic">${escapeHtml(t)}</span>`).join('<br>');
+          const lastTransHtml = allTrans.length
+            ? `<span style="color:#a7f3d0;font-style:italic;font-weight:600">${escapeHtml(allTrans[allTrans.length-1])}</span>`
+            : '';
+          
+          transcriptionTranslatedEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histTransHtml}${histTransHtml && lastTransHtml ? '<br>' : ''}${lastTransHtml}</span>`;
+          transcriptionTranslatedEl.scrollTop = transcriptionTranslatedEl.scrollHeight;
+        }
+        return;
+      }
       if (!transcriptionOriginalEl || !transcriptionTranslatedEl) return;
       updateHistory(segments);
 
@@ -784,6 +797,8 @@ if (window.__audioTranscriptionOverlayApi) {
       clearSilenceMonitor();
       const P = activeProfile;
       silenceFlushTimer = setInterval(() => {
+        applyVideoVolume(false);
+        if (isStandaloneHidden) return;
         const now = Date.now();
         if (now - lastReceivedTime > P.silenceFlushMs) {
           if (previousSegments.length > 0) {
@@ -809,14 +824,10 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function updateHeaderAndStatus(settings) {
       if (!transcriptionHeaderEl) return;
-      const model = (settings.selectedModelSize || "small").toLowerCase();
-      const lang = (settings.selectedLanguage || "AUTO").toUpperCase();
-      const task = settings.selectedTask === "translate" ? "TRANSLATE" : "TRANSCRIBE";
-      const geminiModel = settings.geminiModel || "";
       const target = (settings.targetLanguage || "ES").toUpperCase();
-      const vad = settings.useVad ? "ON" : "OFF";
       const tts = settings.enableTts ? "ON" : "OFF";
       const geminiOn = enableGeminiTranslation;
+      const geminiModel = settings.geminiModel || "";
       const statusText = window.__transcriptionStatusText || "";
       const isError = statusText && (statusText.toLowerCase().includes("error") || statusText.toLowerCase().includes("fallback"));
       const statusBg = isError ? "rgba(220,38,38,0.25)" : "rgba(34,197,94,0.18)";
@@ -830,16 +841,34 @@ if (window.__audioTranscriptionOverlayApi) {
         `<span style="color:${Mu};">${label}</span> <span style="color:${G};">${escapeHtml(value)}</span>`;
       const sep = `&nbsp;&nbsp;`;
 
-      const statsHtml =
-        pill("Model", model) + sep +
-        pill("Language", lang) + sep +
-        pill("Task", task) + sep +
-        pill("Gemini", geminiOn ? "ON" : "OFF") + sep +
-        (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") +
-        pill("Target", target) + sep +
-        pill("VAD", vad) + sep +
-        pill("TTS", tts) +
-        `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+      let statsHtml = "";
+
+      if (isSubtitleMode) {
+        const lang = (currentTrackLang || settings.selectedLanguage || "AUTO").toUpperCase().split('-')[0];
+        statsHtml =
+          pill("Mode", "Subtitles") + sep +
+          pill("Language", lang) + sep +
+          pill("Gemini", geminiOn ? "ON" : "OFF") + sep +
+          (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") +
+          pill("Target", target) + sep +
+          pill("TTS", tts) +
+          `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+      } else {
+        const model = (settings.selectedModelSize || "small").toLowerCase();
+        const lang = (settings.selectedLanguage || "AUTO").toUpperCase();
+        const task = settings.selectedTask === "translate" ? "TRANSLATE" : "TRANSCRIBE";
+        const vad = settings.useVad ? "ON" : "OFF";
+        statsHtml =
+          pill("Model", model) + sep +
+          pill("Language", lang) + sep +
+          pill("Task", task) + sep +
+          pill("Gemini", geminiOn ? "ON" : "OFF") + sep +
+          (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") +
+          pill("Target", target) + sep +
+          pill("VAD", vad) + sep +
+          pill("TTS", tts) +
+          `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+      }
 
       transcriptionHeaderEl.innerHTML = `
         <div style="padding:8px 16px 10px 16px;border-bottom:1px solid rgba(255,255,255,0.08);background:rgba(30,41,59,0.45);width:100%;box-sizing:border-box;">
@@ -1027,8 +1056,17 @@ if (window.__audioTranscriptionOverlayApi) {
       chrome.storage.local.get(
         ["textFormatting", "fontSize", "displayMode", "dividerPos", "selectedModelSize",
          "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts",
-         "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText"],
+         "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText", "isSubtitleTtsActive", "subtitleVideoVolume"],
         (res) => {
+          subtitleVideoVolume = parseFloat(res.subtitleVideoVolume ?? "1.0");
+          applyVideoVolume(true);
+
+          if (res.isSubtitleTtsActive) {
+             isSubtitleMode = true;
+          }
+
+          if (isStandaloneHidden) return;
+
           currentFormatting = res.textFormatting || "advanced";
           currentDisplayMode = res.displayMode || "both";
           currentFontSize = res.fontSize || 20;
@@ -1054,6 +1092,7 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function ensureOverlay() {
+      if (isStandaloneHidden) return;
       let existing = document.getElementById("transcription");
       if (existing) {
         containerElement = existing;
@@ -1074,6 +1113,7 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function hardRemoveOverlay() {
       clearSilenceMonitor();
+      restoreVideoVolume();
       if (resizeObserver) { try { resizeObserver.disconnect(); } catch (e) {} resizeObserver = null; }
       if (containerElement?.parentNode) containerElement.parentNode.removeChild(containerElement);
       if (waitPopupEl?.parentNode) waitPopupEl.parentNode.removeChild(waitPopupEl);
@@ -1082,9 +1122,30 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function stopAndCloseOverlay() { stopTtsNow(); resetRuntimeState(); hardRemoveOverlay(); }
-    function resetSessionView() { ensureOverlay(); resetRuntimeState(); startSilenceMonitor(); applySavedUiSettings(); renderText(); }
+    function resetSessionView(isSubMode = false, isStandalone = false) {
+      isSubtitleMode = !!isSubMode;
+      isStandaloneHidden = !!isStandalone;
+      currentTrackLang = "";
+      
+      if (isStandaloneHidden) {
+        hardRemoveOverlay();
+      } else {
+        ensureOverlay(); 
+      }
+
+      resetRuntimeState(isSubMode); 
+      startSilenceMonitor(); 
+      applySavedUiSettings(); 
+
+      if (!isStandaloneHidden) {
+        renderText(); 
+      }
+    }
 
     function handleTranscriptPayload(raw) {
+      if (!raw) return;
+      if (isSubtitleMode) return;
+      if (isStandaloneHidden) return;
       ensureOverlay();
       let parsed;
       try { parsed = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (e) { parsed = null; }
@@ -1094,7 +1155,7 @@ if (window.__audioTranscriptionOverlayApi) {
       chrome.storage.local.get(
         ["displayMode", "textFormatting", "fontSize", "selectedModelSize", "selectedLanguage",
          "selectedTask", "targetLanguage", "useVad", "enableTts", "enableGeminiTranslation", "geminiModel",
-         "transcriptionProfile", "hideLiveText"],
+         "transcriptionProfile", "hideLiveText", "subtitleVideoVolume"],
         (res) => {
           currentDisplayMode = res.displayMode || "both";
           currentFormatting = res.textFormatting || "advanced";
@@ -1102,11 +1163,13 @@ if (window.__audioTranscriptionOverlayApi) {
           enableGeminiTranslation = !!res.enableGeminiTranslation;
           enableTts = !!res.enableTts;
           hideLiveText = !!res.hideLiveText;
+          subtitleVideoVolume = parseFloat(res.subtitleVideoVolume || "1.0");
           const newProfile = getProfile(res.transcriptionProfile || "balanced");
           if (newProfile !== activeProfile) {
             activeProfile = newProfile;
             startSilenceMonitor();
           }
+          applyVideoVolume(false);
           adjustFontSize(0);
           updateHeaderAndStatus(res || {});
           renderText();
@@ -1115,17 +1178,55 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function onMessage(request, sender, sendResponse) {
+      if (!request || !request.type) return false;
+      
       try {
-        if (request.type === "resetSession") { resetSessionView(); sendResponse({ success: true }); return true; }
-        if (request.type === "showWaitPopup") { ensureOverlay(); showWaitPopup(request.data); sendResponse({ success: true }); return true; }
+        if (request.type === "resetSession") { resetSessionView(request.isSubtitleMode, request.isStandalone); sendResponse({ success: true }); return true; }
+        if (request.type === "showWaitPopup") { if (!isStandaloneHidden) { ensureOverlay(); showWaitPopup(request.data); } sendResponse({ success: true }); return true; }
         if (request.type === "transcript") { handleTranscriptPayload(request.data); sendResponse({ success: true }); return true; }
-        if (request.type === "translationResult") { addTranslatedChunk(request.data); sendResponse({ success: true }); return true; }
+        if (request.type === "translationResult") { if (!isStandaloneHidden) { addTranslatedChunk(request.data); } sendResponse({ success: true }); return true; }
+        if (request.type === "subtitle_display") {
+          if (isStandaloneHidden) { sendResponse({ success: true }); return true; }
+          isSubtitleMode = true;
+          if (request.data.trackLang !== undefined) {
+             currentTrackLang = request.data.trackLang;
+          }
+          ensureOverlay();
+
+          const orig = request.data.original;
+          const trans = request.data.translated;
+          const statusText = request.data.statusText;
+
+          if (orig) {
+            const lastOrig = subtitleOriginalHistory[subtitleOriginalHistory.length - 1];
+            if (orig !== lastOrig) subtitleOriginalHistory.push(orig);
+          }
+
+          if (trans) {
+            const lastTrans = subtitleTranslatedHistory[subtitleTranslatedHistory.length - 1];
+            if (trans !== lastTrans) subtitleTranslatedHistory.push(trans);
+          }
+
+          if (statusText !== undefined) {
+             updateHeaderStatusText(statusText);
+          } else {
+             chrome.storage.local.get(["selectedModelSize", "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts", "geminiModel"], (res) => {
+               if (typeof updateHeaderAndStatus === 'function') updateHeaderAndStatus(res || {});
+             });
+          }
+
+          renderText();
+          applyDisplayMode();
+          sendResponse({ success: true });
+          return true;
+        }
         if (request.type === "STOP") { stopAndCloseOverlay(); sendResponse({ success: true }); return true; }
-        sendResponse({ success: false });
+        
+        return false;
       } catch (e) {
         sendResponse({ success: false, error: e.message });
+        return true;
       }
-      return true;
     }
 
     function bindMessageListenerOnce() {
@@ -1138,6 +1239,13 @@ if (window.__audioTranscriptionOverlayApi) {
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== "local") return;
         let needsRender = false;
+
+        if ("subtitleVideoVolume" in changes) {
+          subtitleVideoVolume = parseFloat(changes.subtitleVideoVolume.newValue || "1.0");
+          applyVideoVolume(true);
+        }
+
+        if (isStandaloneHidden) return;
 
         if ("enableGeminiTranslation" in changes) {
           enableGeminiTranslation = !!changes.enableGeminiTranslation.newValue;
@@ -1161,8 +1269,22 @@ if (window.__audioTranscriptionOverlayApi) {
       });
     }
 
-    function reactivate() { ensureOverlay(); startSilenceMonitor(); applySavedUiSettings(); renderText(); }
-    function init() { bindMessageListenerOnce(); bindStorageListener(); ensureOverlay(); startSilenceMonitor(); applySavedUiSettings(); }
+    function reactivate() { 
+      bindMessageListenerOnce();
+      bindStorageListener();
+    }
+    
+    function init() { 
+      bindMessageListenerOnce(); 
+      bindStorageListener(); 
+      if(!isStandaloneHidden) { 
+        ensureOverlay(); 
+        startSilenceMonitor(); 
+        applySavedUiSettings(); 
+      } else {
+        applySavedUiSettings();
+      }
+    }
 
     init();
     return { reactivate, stopAndCloseOverlay };

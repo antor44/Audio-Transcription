@@ -67,8 +67,11 @@
   let enableTts = false;
   let dedupTail = [];
   let hideLiveText = false;
+  let isSubtitleMode = false;
+  let currentTrackLang = "";
+  let subtitleOriginalHistory = [];
+  let subtitleTranslatedHistory = [];
 
-  // --- Transcription Profile Configs ---
   const PROFILES = {
     accurate: {
       stableWordCount: 15,
@@ -274,15 +277,12 @@
       const newPart = trimPrefixOverlap(lastInQueue, cleanText, 60, 3);
       
       if (stripPunctuation(newPart).length < stripPunctuation(cleanText).length * 0.95) {
-        // This looks like a continuation/correction. Replace the last item.
         translationQueue[translationQueue.length - 1] = cleanText;
       } else {
-        // This seems like a new, separate phrase. Add it.
         translationQueue.push(cleanText);
       }
     }
   
-    // Trigger processing if the queue has content and we're not already processing
     const queued = translationQueue.join(" ");
     const wordCount = queued.split(/\s+/).filter(Boolean).length;
     const hasSentenceBoundary = /[.!?\u2026]/.test(queued);
@@ -296,7 +296,7 @@
     if (isTranslatingLocal || translationQueue.length === 0) return;
     
     const text = translationQueue.join(" ");
-    translationQueue = []; // Clear queue now
+    translationQueue = [];
     isTranslatingLocal = true;
 
     const shownTail = translatedChunks.slice(-3).join(" ")
@@ -310,8 +310,6 @@
         if (response.data) {
           addTranslatedChunk(response.data);
         }
-        // If Gemini failed internally and fell back to Google Translate,
-        // show the actual API error in the status bar for diagnosis.
         if (response.geminiError) {
           updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
         } else {
@@ -321,7 +319,7 @@
         const errMsg = response?.error || runtimeErr || "Translation failed";
         updateHeaderStatusText(`Translation Error: ${errMsg}`);
         console.error("Translation failed:", errMsg, response || null);
-        translationQueue.unshift(text); // Re-queue text on failure
+        translationQueue.unshift(text);
       }
 
       if (translationQueue.length > 0) {
@@ -517,26 +515,32 @@
     if (!transcriptionOriginalEl || !transcriptionTranslatedEl || !dividerEl) return;
 
     if (contentWrapper) {
-      contentWrapper.style.display = "flex";
+      contentWrapper.style.display       = "flex";
       contentWrapper.style.flexDirection = "column";
-      contentWrapper.style.overflow = "hidden";
-      contentWrapper.style.flex = "1 1 0%";
+      contentWrapper.style.flex          = "1 1 0%";
+      contentWrapper.style.overflow      = "hidden";
     }
 
     transcriptionOriginalEl.style.overflowY = "auto";
     transcriptionTranslatedEl.style.overflowY = "auto";
 
-    const hasTranslation = translatedChunks.length > 0;
-    const showTranslation = (enableGeminiTranslation || hasTranslation) &&
-      (currentDisplayMode === "translation" || currentDisplayMode === "both");
-    const showOriginal = currentDisplayMode === "original" || currentDisplayMode === "both" || !showTranslation;
+    const hasTransHistory = isSubtitleMode ? subtitleTranslatedHistory.length > 0 : translatedChunks.length > 0;
+    const isTransActive = enableGeminiTranslation || hasTransHistory;
 
-    if (showOriginal && !showTranslation) {
+    let showOrig = currentDisplayMode === "original" || currentDisplayMode === "both";
+    let showTrans = currentDisplayMode === "translation" || currentDisplayMode === "both";
+
+    if (showTrans && !isTransActive) {
+      showOrig = true;
+      showTrans = false;
+    }
+
+    if (showOrig && !showTrans) {
       transcriptionOriginalEl.style.display = "block";
       transcriptionOriginalEl.style.flex = "1 1 0%";
       transcriptionTranslatedEl.style.display = "none";
       dividerEl.style.display = "none";
-    } else if (!showOriginal && showTranslation) {
+    } else if (!showOrig && showTrans) {
       transcriptionOriginalEl.style.display = "none";
       dividerEl.style.display = "none";
       transcriptionTranslatedEl.style.display = "block";
@@ -598,14 +602,10 @@
       "display:flex;align-items:center;justify-content:space-between;gap:8px;overflow:hidden;white-space:nowrap;" +
       "min-width:0;padding:2px 8px;min-height:22px;width:100%;box-sizing:border-box;";
 
-    const model = (settings.selectedModelSize || "small").toLowerCase();
-    const lang = (settings.selectedLanguage || "AUTO").toUpperCase();
-    const task = settings.selectedTask === "translate" ? "TRANSLATE" : "TRANSCRIBE";
-    const geminiModel = settings.geminiModel || "";
     const target = (settings.targetLanguage || "ES").toUpperCase();
-    const vad = settings.useVad ? "ON" : "OFF";
     const tts = settings.enableTts ? "ON" : "OFF";
     const geminiOn = enableGeminiTranslation;
+    const geminiModel = settings.geminiModel || "";
     const G = "#4ade80";
     const M = "#94a3b8";
     const statusText = window.__transcriptionStatusText || "";
@@ -617,10 +617,27 @@
 
     const pill = (label, value, active = true) =>
       `<span style="white-space:nowrap;"><span style="color:${M};">${label}&nbsp;</span><span style="color:${active ? G : M};">${escapeHtml(value)}</span></span>`;
-
     const sep = `<span style="color:#475569;padding:0 4px;font-size:10px;">·</span>`;
 
-    const statsHtml =
+    let statsHtml = "";
+
+    if (isSubtitleMode) {
+      const lang = (currentTrackLang || "AUTO").toUpperCase().split('-')[0];
+      statsHtml =
+        pill("Mode", "Subtitles") + sep +
+        pill("Language", lang) + sep +
+        pill("Gemini", geminiOn ? "ON" : "OFF") + sep +
+        (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") +
+        pill("Target", target) + sep +
+        pill("TTS", tts) +
+        `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+    } else {
+      const model = (settings.selectedModelSize || "small").toLowerCase();
+      const lang = (settings.selectedLanguage || "AUTO").toUpperCase();
+      const task = settings.selectedTask === "translate" ? "TRANSLATE" : "TRANSCRIBE";
+      const vad = settings.useVad ? "ON" : "OFF";
+
+      statsHtml =
         pill("Model", model) + sep +
         pill("Language", lang) + sep +
         pill("Task", task) + sep +
@@ -630,6 +647,7 @@
         pill("VAD", vad) + sep +
         pill("TTS", tts) +
         `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+    }
 
     statusLineEl.innerHTML =
       `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${statsHtml}</span>` +
@@ -661,7 +679,7 @@
     chrome.storage.local.set({ fontSize: currentFontSize });
   }
 
-  function resetGlobalState() {
+  function resetGlobalState(isSubMode = false) {
     segments = [];
     previousSegments = [];
     dedupTail = historyChunks.slice(-40);
@@ -673,12 +691,18 @@
     lastReceivedTime = Date.now();
     translationQueue = [];
     isTranslatingLocal = false;
+    isSubtitleMode = !!isSubMode;
+    currentTrackLang = "";
+    subtitleOriginalHistory = [];
+    subtitleTranslatedHistory = [];
     if (statusClearTimer) { clearTimeout(statusClearTimer); statusClearTimer = null; }
     window.__transcriptionStatusText = "";
     try { chrome.runtime.sendMessage({ action: "resetTranslationContext" }); } catch (e) {}
   }
 
   function handleTranscriptPayload(raw) {
+    if (isSubtitleMode) return;
+    isSubtitleMode = false;
     let parsed;
     try { parsed = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (e) { parsed = null; }
     segments = Array.isArray(parsed?.segments) ? parsed.segments : [];
@@ -707,7 +731,7 @@
   }
 
   dividerEl.addEventListener("mousedown", (e) => {
-    if (currentDisplayMode !== "both" || !enableGeminiTranslation) return;
+    if (currentDisplayMode !== "both" || (!enableGeminiTranslation && !isSubtitleMode)) return;
     isDraggingDivider = true;
     document.body.style.cursor = "row-resize";
 
@@ -751,6 +775,34 @@
   }
 
   function renderText() {
+    if (isSubtitleMode) {
+      applyDisplayMode();
+
+      if (transcriptionOriginalEl) {
+        const allOrig = subtitleOriginalHistory;
+        const histHtml = allOrig.slice(0, -1)
+          .map(t => `<span style="opacity:0.55">${escapeHtml(t)}</span>`).join('<br>');
+        const lastHtml = allOrig.length
+          ? `<span style="color:#fff;font-weight:600">${escapeHtml(allOrig[allOrig.length-1])}</span>`
+          : '';
+        transcriptionOriginalEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histHtml}${histHtml && lastHtml ? '<br>' : ''}${lastHtml}</span>`;
+        transcriptionOriginalEl.scrollTop = transcriptionOriginalEl.scrollHeight;
+      }
+
+      if (transcriptionTranslatedEl) {
+        const allTrans = subtitleTranslatedHistory;
+        const histTransHtml = allTrans.slice(0, -1)
+          .map(t => `<span style="opacity:0.55;color:#a7f3d0;font-style:italic">${escapeHtml(t)}</span>`).join('<br>');
+        const lastTransHtml = allTrans.length
+          ? `<span style="color:#a7f3d0;font-style:italic;font-weight:600">${escapeHtml(allTrans[allTrans.length-1])}</span>`
+          : '';
+          
+        transcriptionTranslatedEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histTransHtml}${histTransHtml && lastTransHtml ? '<br>' : ''}${lastTransHtml}</span>`;
+        transcriptionTranslatedEl.scrollTop = transcriptionTranslatedEl.scrollHeight;
+      }
+      return;
+    }
+    if (!transcriptionOriginalEl || !transcriptionTranslatedEl) return;
     updateHistory(segments);
 
     const committedText = getVisibleOriginalText();
@@ -786,9 +838,11 @@
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (!request || !request.type) return false;
+    
     try {
       if (request.type === "resetSession") {
-        resetGlobalState();
+        resetGlobalState(request.isSubtitleMode);
         startSilenceMonitor();
         renderText();
         sendResponse({ success: true });
@@ -804,19 +858,54 @@
         sendResponse({ success: true });
         return true;
       }
+      if (request.type === "subtitle_display") {
+        isSubtitleMode = true;
+        if (request.data.trackLang !== undefined) {
+           currentTrackLang = request.data.trackLang;
+        }
+
+        const orig = request.data.original;
+        const trans = request.data.translated;
+        const statusText = request.data.statusText;
+
+        if (orig) {
+          const lastOrig = subtitleOriginalHistory[subtitleOriginalHistory.length - 1];
+          if (orig !== lastOrig) subtitleOriginalHistory.push(orig);
+        }
+
+        if (trans) {
+          const lastTrans = subtitleTranslatedHistory[subtitleTranslatedHistory.length - 1];
+          if (trans !== lastTrans) subtitleTranslatedHistory.push(trans);
+        }
+
+        if (statusText !== undefined) {
+           updateHeaderStatusText(statusText);
+        } else {
+           chrome.storage.local.get(["selectedModelSize", "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts", "geminiModel"], (res) => {
+             if (typeof updateStatusBar === 'function') updateStatusBar(res || {});
+           });
+        }
+
+        renderText();
+        applyDisplayMode();
+        sendResponse({ success: true });
+        return true;
+      }
+
       if (request.type === "STOP") {
         stopTtsNow();
-        resetGlobalState();
+        resetGlobalState(false);
         clearSilenceMonitor();
         sendResponse({ success: true });
         window.close();
         return true;
       }
-      sendResponse({ success: false });
+      
+      return false;
     } catch (e) {
       sendResponse({ success: false, error: e.message });
+      return true;
     }
-    return true;
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -853,7 +942,7 @@
   chrome.storage.local.get(
     ["textFormatting", "displayMode", "fontSize", "dividerPos", "selectedModelSize",
      "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts",
-     "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText"],
+     "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText", "isSubtitleTtsActive"],
     (res) => {
       currentFormatting = res.textFormatting || "advanced";
       currentDisplayMode = res.displayMode || "both";
@@ -862,6 +951,10 @@
       hideLiveText = !!res.hideLiveText;
       activeProfile = getProfile(res.transcriptionProfile || "balanced");
       applyFontSize(res.fontSize || 20);
+
+      if (res.isSubtitleTtsActive) {
+         isSubtitleMode = true;
+      }
 
       const pos = parseFloat(res.dividerPos);
       if (Number.isFinite(pos) && pos > 0.1 && pos < 0.9) {

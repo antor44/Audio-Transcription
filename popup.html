@@ -29,445 +29,774 @@
 -->
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Audio Capture</title>
+  <title>Audio Transcription</title>
   <link rel="stylesheet" href="style.css" type="text/css">
+  <style>
+    /* ── Tab bar ── */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      margin: 12px 16px 0;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+      background: var(--bg-card-2);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 8px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s;
+      letter-spacing: 0.02em;
+    }
+    .tab-btn:first-child { border-right: 1px solid var(--border-color); }
+    .tab-btn.active {
+      background: var(--primary-color);
+      color: #fff;
+    }
+    .tab-btn:hover:not(.active) {
+      background: rgba(59,130,246,0.12);
+      color: var(--text-main);
+    }
+    /* ── Tab panels ── */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    /* ── Status badge ── */
+    .status-badge {
+      font-size: 12px; font-weight: 700; color: #94a3b8;
+      background: rgba(148,163,184,.12); padding: 4px 10px;
+      border-radius: 999px; border: 1px solid rgba(148,163,184,.18);
+      min-width: 64px; text-align: center;
+    }
+    /* ── Shared label row ── */
+    .shared-label {
+      margin: 16px 20px 6px;
+      font-size: 11px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--accent-color);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .shared-label::after {
+      content: ""; flex: 1; height: 1px;
+      background: var(--border-color); opacity: 0.9;
+    }
+    /* ── Info text ── */
+    .info-text {
+      font-size: 12px; color: #64748b;
+      margin: 0 0 12px 0; line-height: 1.6;
+    }
+    /* ── Subtitle-specific slowdown row hidden by default ── */
+    #subtitleSlowdownRow { display: none; }
+    /* ── License ── */
+    .license-box {
+      margin: 4px 16px 8px;
+      padding: 10px 14px;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      background: rgba(15,23,42,0.6);
+      font-size: 10px; color: #64748b; line-height: 1.6;
+    }
+    .license-box a { color: #60a5fa; text-decoration: none; }
+  </style>
 </head>
 
 <body>
+  <!-- ══ Header ══ -->
   <div class="header">
     <img src="./icon128.png" alt="Extension icon" />
-    <h1>Audio Transcription <span id="extensionVersion" style="font-size:11px;font-weight:500;color:#64748b;letter-spacing:0.02em;"></span></h1>
+    <h1>Audio Transcription <span id="extensionVersion" style="font-size:11px;font-weight:500;color:#64748b;"></span></h1>
   </div>
 
-  <div class="section">
-    <div class="card">
-      <div class="row" style="justify-content: space-between; align-items: center;">
-        <label style="margin: 0; font-weight: 600;">Status</label>
-        <span id="connectionStatus"
-          style="font-size: 12px; font-weight: 700; color: #94a3b8; background: rgba(148,163,184,.12); padding: 4px 8px; border-radius: 999px;">
-          Idle
-        </span>
+  <!-- ══ Tab bar ══ -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tabBtnSubtitle" data-tab="subtitle">
+      🎬 Subtitle TTS
+    </button>
+    <button class="tab-btn" id="tabBtnWhisper" data-tab="whisper">
+      📡 WhisperLive
+    </button>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB 1 — Subtitle TTS                                       -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel active" id="panelSubtitle">
+
+    <!-- Status -->
+    <div class="section" style="margin-top:12px;">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <label style="margin:0;font-weight:600;">Status</label>
+          <span id="subtitleTtsStatus" class="status-badge">Idle</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="button-container">
-    <button class="button" id="startCapture">Start Capture</button>
-    <button class="button" id="stopCapture" disabled>Stop Capture</button>
-  </div>
+    <!-- Buttons -->
+    <div class="button-container">
+      <button class="button" id="startSubtitleTts">▶ Start Subtitle TTS</button>
+      <button class="button" id="stopSubtitleTts" disabled>■ Stop</button>
+    </div>
 
-  <div class="section" id="tts-top-section">
-    <div class="card">
-      <div class="input-container">
-        <label for="ttsSpeed">Speech (TTS) Speed</label>
-        <div class="row">
-          <input type="range" id="ttsSpeed" min="0.5" max="2.0" step="0.1" value="1.0">
-          <span id="ttsSpeedValue">1.0x</span>
+    <!-- Mode info + settings -->
+    <h2>Subtitle TTS Settings</h2>
+    <div class="section">
+      <div class="card">
+        <p class="info-text">
+          Reads video subtitles aloud — no WhisperLive server needed.<br>
+          Works with YouTube, Twitch (CC) and any HTML5 video with subtitles.<br>
+          <strong>Enable subtitles on the video before clicking Start.</strong>
+        </p>
+
+        <div class="checkbox-container">
+          <input type="checkbox" id="hideNativeSubtitles">
+          <label for="hideNativeSubtitles">Hide Original YouTube Subtitles</label>
         </div>
-        <div class="checkbox-container" style="margin-top: 5px;">
+
+        <div class="input-container" style="margin-top:12px;">
+          <label for="stts_displayModeDropdown">Display Mode</label>
+          <select id="stts_displayModeDropdown">
+            <option value="original">Original Only</option>
+            <option value="translation">Translation Only</option>
+            <option value="both" selected>Side by Side</option>
+          </select>
+        </div>
+
+        <div class="checkbox-container">
+          <input type="checkbox" id="stts_useStandaloneCheckbox">
+          <label for="stts_useStandaloneCheckbox">Show in Standalone Window</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Speech (TTS) & Video Controls -->
+    <h2>Speech (TTS)</h2>
+    <div class="section">
+      <div class="card">
+        
+        <div class="input-container">
+          <label for="subtitlePlaybackControl">Video During TTS</label>
+          <select id="subtitlePlaybackControl">
+            <option value="pause">Pause video</option>
+            <option value="slowdown">Slow down video</option>
+            <option value="none">No control (free-running)</option>
+          </select>
+        </div>
+
+        <div class="input-container" id="subtitleSlowdownRow">
+          <label for="subtitleSlowdownRate">Slow Down Rate</label>
+          <div class="row">
+            <input type="range" id="subtitleSlowdownRate" min="0.3" max="0.9" step="0.1" value="0.8">
+            <span id="subtitleSlowdownRateValue">0.8x</span>
+          </div>
+        </div>
+
+        <div class="input-container" style="margin-top:4px;">
+          <label for="subtitleVideoVolume">Original Video Volume</label>
+          <div class="row">
+            <input type="range" id="subtitleVideoVolume" min="0" max="1" step="0.05" value="1">
+            <span id="subtitleVideoVolumeValue">100%</span>
+          </div>
+        </div>
+
+        <div class="input-container" style="margin-top:12px;">
+          <label for="ttsSpeed">TTS Speed</label>
+          <div class="row">
+            <input type="range" id="ttsSpeed" min="0.5" max="2.0" step="0.1" value="1.0">
+            <span id="ttsSpeedValue">1.0x</span>
+          </div>
+        </div>
+        
+        <div class="checkbox-container">
           <input type="checkbox" id="enableTtsCheckbox">
           <label for="enableTtsCheckbox">Enable Speech (TTS)</label>
         </div>
+        
       </div>
     </div>
-  </div>
 
+    <!-- AI Translation (shared) -->
+    <h2>AI Translation</h2>
+    <div class="section">
+      <div class="card">
+        <div class="checkbox-container" style="margin-bottom:12px;">
+          <input type="checkbox" id="enableGeminiTranslationCheckbox">
+          <label for="enableGeminiTranslationCheckbox">Enable Translation</label>
+        </div>
 
+        <div class="input-container" id="geminiApiKeyRow">
+          <label for="geminiApiKey">Gemini API Key</label>
+          <input type="text" id="geminiApiKey" placeholder="Paste Key Here" autocomplete="off">
+        </div>
 
-  <div class="section">
-    <div class="card">
-      <div class="checkbox-container">
-        <input type="checkbox" id="useStandaloneCheckbox">
-        <label for="useStandaloneCheckbox">Show in Standalone Window</label>
-      </div>
-      <div class="checkbox-container">
-        <input type="checkbox" id="useVadCheckbox" checked>
-        <label for="useVadCheckbox">Voice Activity Detection</label>
-      </div>
-    </div>
-  </div>
+        <div class="input-container">
+          <label for="geminiModelDropdown">Translation Engine</label>
+          <select id="geminiModelDropdown">
+            <optgroup label="No API Key Required">
+              <option value="google-translate">Google Translate (free)</option>
+            </optgroup>
+            <optgroup label="Gemini Models (API Key required)">
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+              <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+              <option value="gemini-3.1-flash-lite-preview" selected>gemini-3.1-flash-lite-preview</option>
+              <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+            </optgroup>
+          </select>
+        </div>
 
-  <h2>WhisperLive Server</h2>
-  <div class="section">
-    <div class="card">
-      <div class="input-container">
-        <label for="ipAddress">Server Connection</label>
-        <div class="row">
-          <input type="text" id="ipAddress" value="localhost" placeholder="IP Address" autocomplete="off">
-          <input type="number" id="port" value="9090" placeholder="Port" style="max-width: 80px;" autocomplete="off">
+        <div class="input-container" style="margin-bottom:0;">
+          <label for="targetLanguageDropdown">Target Language</label>
+          <select id="targetLanguageDropdown">
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+            <option value="ru">Russian</option>
+            <option value="ar">Arabic</option>
+            <option value="hi">Hindi</option>
+            <option value="ko">Korean</option>
+            <optgroup label="Other Languages">
+              <option value="af">Afrikaans</option>
+              <option value="am">Amharic</option>
+              <option value="as">Assamese</option>
+              <option value="az">Azerbaijani</option>
+              <option value="ba">Bashkir</option>
+              <option value="be">Belarusian</option>
+              <option value="bg">Bulgarian</option>
+              <option value="bn">Bengali</option>
+              <option value="bo">Tibetan</option>
+              <option value="br">Breton</option>
+              <option value="bs">Bosnian</option>
+              <option value="ca">Catalan</option>
+              <option value="cs">Czech</option>
+              <option value="cy">Welsh</option>
+              <option value="da">Danish</option>
+              <option value="el">Greek</option>
+              <option value="eo">Esperanto</option>
+              <option value="et">Estonian</option>
+              <option value="eu">Basque</option>
+              <option value="fa">Persian</option>
+              <option value="fi">Finnish</option>
+              <option value="fo">Faroese</option>
+              <option value="ga">Irish</option>
+              <option value="gl">Galician</option>
+              <option value="gu">Gujarati</option>
+              <option value="ha">Hausa</option>
+              <option value="haw">Hawaiian</option>
+              <option value="he">Hebrew</option>
+              <option value="hr">Croatian</option>
+              <option value="ht">Haitian Creole</option>
+              <option value="hu">Hungarian</option>
+              <option value="hy">Armenian</option>
+              <option value="id">Indonesian</option>
+              <option value="is">Icelandic</option>
+              <option value="jw">Javanese</option>
+              <option value="ka">Georgian</option>
+              <option value="kk">Kazakh</option>
+              <option value="km">Khmer</option>
+              <option value="kn">Kannada</option>
+              <option value="ku">Kurdish</option>
+              <option value="ky">Kyrgyz</option>
+              <option value="la">Latin</option>
+              <option value="lb">Luxembourgish</option>
+              <option value="ln">Lingala</option>
+              <option value="lo">Lao</option>
+              <option value="lt">Lithuanian</option>
+              <option value="lv">Latvian</option>
+              <option value="mg">Malagasy</option>
+              <option value="mi">Maori</option>
+              <option value="mk">Macedonian</option>
+              <option value="ml">Malayalam</option>
+              <option value="mn">Mongolian</option>
+              <option value="mr">Marathi</option>
+              <option value="ms">Malay</option>
+              <option value="mt">Maltese</option>
+              <option value="my">Myanmar</option>
+              <option value="ne">Nepali</option>
+              <option value="nl">Dutch</option>
+              <option value="nn">Nynorsk</option>
+              <option value="no">Norwegian</option>
+              <option value="oc">Occitan</option>
+              <option value="or">Oriya</option>
+              <option value="pa">Punjabi</option>
+              <option value="pl">Polish</option>
+              <option value="ps">Pashto</option>
+              <option value="ro">Romanian</option>
+              <option value="sa">Sanskrit</option>
+              <option value="sd">Sindhi</option>
+              <option value="sh">Serbo-Croatian</option>
+              <option value="si">Sinhala</option>
+              <option value="sk">Slovak</option>
+              <option value="sl">Slovenian</option>
+              <option value="sn">Shona</option>
+              <option value="so">Somali</option>
+              <option value="sq">Albanian</option>
+              <option value="sr">Serbian</option>
+              <option value="su">Sundanese</option>
+              <option value="sv">Swedish</option>
+              <option value="sw">Swahili</option>
+              <option value="ta">Tamil</option>
+              <option value="te">Telugu</option>
+              <option value="tg">Tajik</option>
+              <option value="th">Thai</option>
+              <option value="tl">Tagalog</option>
+              <option value="tk">Turkmen</option>
+              <option value="tr">Turkish</option>
+              <option value="tt">Tatar</option>
+              <option value="ug">Uighur</option>
+              <option value="uk">Ukrainian</option>
+              <option value="ur">Urdu</option>
+              <option value="uz">Uzbek</option>
+              <option value="vi">Vietnamese</option>
+              <option value="vo">Volapuk</option>
+              <option value="wa">Walloon</option>
+              <option value="xh">Xhosa</option>
+              <option value="yi">Yiddish</option>
+              <option value="yo">Yoruba</option>
+              <option value="zu">Zulu</option>
+            </optgroup>
+          </select>
         </div>
       </div>
-      <div class="row" style="justify-content: flex-end; margin-top: 8px;">
-        <button id="defaultIpButton" class="small-button" type="button">Reset Default</button>
+    </div>
+
+  </div><!-- /panelSubtitle -->
+
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- TAB 2 — WhisperLive                                        -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="panelWhisper">
+
+    <!-- Status -->
+    <div class="section" style="margin-top:12px;">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <label style="margin:0;font-weight:600;">Status</label>
+          <span id="connectionStatus" class="status-badge">Idle</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <h2>Transcription Settings</h2>
-  <div class="section">
-    <div class="card">
-      <div class="input-container">
-        <label for="languageDropdown">Audio Language</label>
-        <select id="languageDropdown">
-          <option value="" selected>Auto Detect (Whisper)</option>
-          <option value="en">English</option>
-          <option value="es">Spanish</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="it">Italian</option>
-          <option value="pt">Portuguese</option>
-          <option value="ja">Japanese</option>
-          <option value="zh">Chinese</option>
-          <option value="ru">Russian</option>
-          <option value="ar">Arabic</option>
-          <option value="hi">Hindi</option>
-          <option value="ko">Korean</option>
+    <!-- Buttons -->
+    <div class="button-container">
+      <button class="button" id="startCapture">▶ Start Capture</button>
+      <button class="button" id="stopCapture" disabled>■ Stop</button>
+    </div>
 
-          <optgroup label="Other Languages">
-
-            <option value="af">Afrikaans</option>
-            <option value="am">Amharic</option>
-            <option value="as">Assamese</option>
-            <option value="az">Azerbaijani</option>
-            <option value="ba">Bashkir</option>
-            <option value="be">Belarusian</option>
-            <option value="bg">Bulgarian</option>
-            <option value="bn">Bengali</option>
-            <option value="bo">Tibetan</option>
-            <option value="br">Breton</option>
-            <option value="bs">Bosnian</option>
-            <option value="ca">Catalan</option>
-            <option value="cs">Czech</option>
-            <option value="cy">Welsh</option>
-            <option value="da">Danish</option>
-            <option value="el">Greek</option>
-            <option value="eo">Esperanto</option>
-            <option value="et">Estonian</option>
-            <option value="eu">Basque</option>
-            <option value="fa">Persian</option>
-            <option value="fi">Finnish</option>
-            <option value="fo">Faroese</option>
-            <option value="ga">Irish</option>
-            <option value="gl">Galician</option>
-            <option value="gu">Gujarati</option>
-            <option value="ha">Hausa</option>
-            <option value="haw">Hawaiian</option>
-            <option value="he">Hebrew</option>
-            <option value="hr">Croatian</option>
-            <option value="ht">Haitian Creole</option>
-            <option value="hu">Hungarian</option>
-            <option value="hy">Armenian</option>
-            <option value="id">Indonesian</option>
-            <option value="is">Icelandic</option>
-            <option value="jw">Javanese</option>
-            <option value="ka">Georgian</option>
-            <option value="kk">Kazakh</option>
-            <option value="km">Khmer</option>
-            <option value="kn">Kannada</option>
-            <option value="ku">Kurdish</option>
-            <option value="ky">Kyrgyz</option>
-            <option value="la">Latin</option>
-            <option value="lb">Luxembourgish</option>
-            <option value="ln">Lingala</option>
-            <option value="lo">Lao</option>
-            <option value="lt">Lithuanian</option>
-            <option value="lv">Latvian</option>
-            <option value="mg">Malagasy</option>
-            <option value="mi">Maori</option>
-            <option value="mk">Macedonian</option>
-            <option value="ml">Malayalam</option>
-            <option value="mn">Mongolian</option>
-            <option value="mr">Marathi</option>
-            <option value="ms">Malay</option>
-            <option value="mt">Maltese</option>
-            <option value="my">Myanmar</option>
-            <option value="ne">Nepali</option>
-            <option value="nl">Dutch</option>
-            <option value="nn">Nynorsk</option>
-            <option value="no">Norwegian</option>
-            <option value="oc">Occitan</option>
-            <option value="or">Oriya</option>
-            <option value="pa">Punjabi</option>
-            <option value="pl">Polish</option>
-            <option value="ps">Pashto</option>
-            <option value="ro">Romanian</option>
-            <option value="sa">Sanskrit</option>
-            <option value="sd">Sindhi</option>
-            <option value="sh">Serbo-Croatian</option>
-            <option value="si">Sinhala</option>
-            <option value="sk">Slovak</option>
-            <option value="sl">Slovenian</option>
-            <option value="sn">Shona</option>
-            <option value="so">Somali</option>
-            <option value="sq">Albanian</option>
-            <option value="sr">Serbian</option>
-            <option value="su">Sundanese</option>
-            <option value="sv">Swedish</option>
-            <option value="sw">Swahili</option>
-            <option value="ta">Tamil</option>
-            <option value="te">Telugu</option>
-            <option value="tg">Tajik</option>
-            <option value="th">Thai</option>
-            <option value="tl">Tagalog</option>
-            <option value="tk">Turkmen</option>
-            <option value="tr">Turkish</option>
-            <option value="tt">Tatar</option>
-            <option value="ug">Uighur</option>
-            <option value="uk">Ukrainian</option>
-            <option value="ur">Urdu</option>
-            <option value="uz">Uzbek</option>
-            <option value="vi">Vietnamese</option>
-            <option value="vo">Volapuk</option>
-            <option value="wa">Walloon</option>
-            <option value="xh">Xhosa</option>
-            <option value="yi">Yiddish</option>
-            <option value="yo">Yoruba</option>
-            <option value="zu">Zulu</option>
-
-          </optgroup>
-        </select>
-      </div>
-
-      <div class="input-container">
-        <label for="taskDropdown">Whisper Task</label>
-        <select id="taskDropdown">
-          <option value="transcribe" selected>Transcribe</option>
-          <option value="translate">Translate (to English)</option>
-        </select>
-      </div>
-
-      <div class="input-container">
-        <label for="modelSizeDropdown">Model Size</label>
-        <select id="modelSizeDropdown">
-          <option value="base">Base</option>
-          <option value="small" selected>Small</option>
-          <option value="medium">Medium</option>
-          <option value="large-v2">Large-v2</option>
-          <option value="large-v3-turbo">Large-v3-turbo</option>
-          <option value="large-v3">Large-v3</option>
-        </select>
-      </div>
-
-      <div class="input-container">
-        <label for="textFormattingDropdown">Text Formatting</label>
-        <select id="textFormattingDropdown">
-          <option value="none">Raw Segments</option>
-          <option value="join">Joined Text</option>
-          <option value="advanced" selected>Advanced Paragraphs</option>
-        </select>
-      </div>
-
-      <div class="input-container">
-        <label for="transcriptionProfileDropdown">Transcription Profile</label>
-        <select id="transcriptionProfileDropdown">
-          <option value="accurate">Accurate (more lag, conservative)</option>
-          <option value="balanced" selected>Balanced (default)</option>
-          <option value="lowlag">Low Lag (fast, less accurate)</option>
-        </select>
-      </div>
-
-      <div class="checkbox-container" style="margin-top: 5px;">
-        <input type="checkbox" id="hideLiveTextCheckbox">
-        <label for="hideLiveTextCheckbox">Hide Live Text (show only stable text)</label>
+    <!-- Server -->
+    <h2>WhisperLive Server</h2>
+    <div class="section">
+      <div class="card">
+        <div class="input-container">
+          <label for="ipAddress">Server Connection</label>
+          <div class="row">
+            <input type="text" id="ipAddress" value="localhost" placeholder="IP Address" autocomplete="off">
+            <input type="number" id="port" value="9090" placeholder="Port" style="max-width:80px;" autocomplete="off">
+          </div>
+        </div>
+        <div class="row" style="justify-content:flex-end;margin-top:8px;">
+          <button id="defaultIpButton" class="small-button" type="button">Reset Default</button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <h2>AI Translation</h2>
-  <div class="section">
-    <div class="card">
-      <div class="checkbox-container" style="margin-bottom: 12px;">
-        <input type="checkbox" id="enableGeminiTranslationCheckbox">
-        <label for="enableGeminiTranslationCheckbox">Enable Gemini Translation</label>
-      </div>
+    <!-- Transcription -->
+    <h2>Transcription Settings</h2>
+    <div class="section">
+      <div class="card">
+        <div class="input-container">
+          <label for="languageDropdown">Audio Language</label>
+          <select id="languageDropdown">
+            <option value="" selected>Auto Detect (Whisper)</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+            <option value="ru">Russian</option>
+            <option value="ar">Arabic</option>
+            <option value="hi">Hindi</option>
+            <option value="ko">Korean</option>
+            <optgroup label="Other Languages">
+              <option value="af">Afrikaans</option>
+              <option value="am">Amharic</option>
+              <option value="as">Assamese</option>
+              <option value="az">Azerbaijani</option>
+              <option value="ba">Bashkir</option>
+              <option value="be">Belarusian</option>
+              <option value="bg">Bulgarian</option>
+              <option value="bn">Bengali</option>
+              <option value="bo">Tibetan</option>
+              <option value="br">Breton</option>
+              <option value="bs">Bosnian</option>
+              <option value="ca">Catalan</option>
+              <option value="cs">Czech</option>
+              <option value="cy">Welsh</option>
+              <option value="da">Danish</option>
+              <option value="el">Greek</option>
+              <option value="eo">Esperanto</option>
+              <option value="et">Estonian</option>
+              <option value="eu">Basque</option>
+              <option value="fa">Persian</option>
+              <option value="fi">Finnish</option>
+              <option value="fo">Faroese</option>
+              <option value="ga">Irish</option>
+              <option value="gl">Galician</option>
+              <option value="gu">Gujarati</option>
+              <option value="ha">Hausa</option>
+              <option value="haw">Hawaiian</option>
+              <option value="he">Hebrew</option>
+              <option value="hr">Croatian</option>
+              <option value="ht">Haitian Creole</option>
+              <option value="hu">Hungarian</option>
+              <option value="hy">Armenian</option>
+              <option value="id">Indonesian</option>
+              <option value="is">Icelandic</option>
+              <option value="jw">Javanese</option>
+              <option value="ka">Georgian</option>
+              <option value="kk">Kazakh</option>
+              <option value="km">Khmer</option>
+              <option value="kn">Kannada</option>
+              <option value="ku">Kurdish</option>
+              <option value="ky">Kyrgyz</option>
+              <option value="la">Latin</option>
+              <option value="lb">Luxembourgish</option>
+              <option value="ln">Lingala</option>
+              <option value="lo">Lao</option>
+              <option value="lt">Lithuanian</option>
+              <option value="lv">Latvian</option>
+              <option value="mg">Malagasy</option>
+              <option value="mi">Maori</option>
+              <option value="mk">Macedonian</option>
+              <option value="ml">Malayalam</option>
+              <option value="mn">Mongolian</option>
+              <option value="mr">Marathi</option>
+              <option value="ms">Malay</option>
+              <option value="mt">Maltese</option>
+              <option value="my">Myanmar</option>
+              <option value="ne">Nepali</option>
+              <option value="nl">Dutch</option>
+              <option value="nn">Nynorsk</option>
+              <option value="no">Norwegian</option>
+              <option value="oc">Occitan</option>
+              <option value="or">Oriya</option>
+              <option value="pa">Punjabi</option>
+              <option value="pl">Polish</option>
+              <option value="ps">Pashto</option>
+              <option value="ro">Romanian</option>
+              <option value="sa">Sanskrit</option>
+              <option value="sd">Sindhi</option>
+              <option value="sh">Serbo-Croatian</option>
+              <option value="si">Sinhala</option>
+              <option value="sk">Slovak</option>
+              <option value="sl">Slovenian</option>
+              <option value="sn">Shona</option>
+              <option value="so">Somali</option>
+              <option value="sq">Albanian</option>
+              <option value="sr">Serbian</option>
+              <option value="su">Sundanese</option>
+              <option value="sv">Swedish</option>
+              <option value="sw">Swahili</option>
+              <option value="ta">Tamil</option>
+              <option value="te">Telugu</option>
+              <option value="tg">Tajik</option>
+              <option value="th">Thai</option>
+              <option value="tl">Tagalog</option>
+              <option value="tk">Turkmen</option>
+              <option value="tr">Turkish</option>
+              <option value="tt">Tatar</option>
+              <option value="ug">Uighur</option>
+              <option value="uk">Ukrainian</option>
+              <option value="ur">Urdu</option>
+              <option value="uz">Uzbek</option>
+              <option value="vi">Vietnamese</option>
+              <option value="vo">Volapuk</option>
+              <option value="wa">Walloon</option>
+              <option value="xh">Xhosa</option>
+              <option value="yi">Yiddish</option>
+              <option value="yo">Yoruba</option>
+              <option value="zu">Zulu</option>
+            </optgroup>
+          </select>
+        </div>
 
-      <div class="input-container" id="geminiApiKeyRow">
-        <label for="geminiApiKey">Gemini API Key</label>
-        <input type="text" id="geminiApiKey" placeholder="Paste Key Here" autocomplete="off">
-      </div>
+        <div class="input-container">
+          <label for="taskDropdown">Whisper Task</label>
+          <select id="taskDropdown">
+            <option value="transcribe" selected>Transcribe</option>
+            <option value="translate">Translate (to English)</option>
+          </select>
+        </div>
 
-      <div class="input-container">
-        <label for="geminiModelDropdown">Translation Engine / Model</label>
-        <select id="geminiModelDropdown">
-          <optgroup label="No API Key Required">
-            <option value="google-translate">Google Translate (free, no key)</option>
-          </optgroup>
-          <optgroup label="Gemini Models (API Key required)">
-            <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-            <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-            <option value="gemini-3.1-flash-lite-preview" selected>gemini-3.1-flash-lite-preview</option>
-            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-          </optgroup>
-        </select>
-      </div>
+        <div class="input-container">
+          <label for="modelSizeDropdown">Model Size</label>
+          <select id="modelSizeDropdown">
+            <option value="base">Base</option>
+            <option value="small" selected>Small</option>
+            <option value="medium">Medium</option>
+            <option value="large-v2">Large-v2</option>
+            <option value="large-v3-turbo">Large-v3-turbo</option>
+            <option value="large-v3">Large-v3</option>
+          </select>
+        </div>
 
-      <div class="input-container">
-        <label for="targetLanguageDropdown">Target Language</label>
-        <select id="targetLanguageDropdown">
-          <option value="en">English</option>
-          <option value="es">Spanish</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="it">Italian</option>
-          <option value="pt">Portuguese</option>
-          <option value="ja">Japanese</option>
-          <option value="zh">Chinese</option>
-          <option value="ru">Russian</option>
-          <option value="ar">Arabic</option>
-          <option value="hi">Hindi</option>
-          <option value="ko">Korean</option>
+        <div class="input-container">
+          <label for="transcriptionProfileDropdown">Profile</label>
+          <select id="transcriptionProfileDropdown">
+            <option value="accurate">Accurate (more lag)</option>
+            <option value="balanced" selected>Balanced (default)</option>
+            <option value="lowlag">Low Lag (fast)</option>
+          </select>
+        </div>
 
-          <optgroup label="Other Languages">
+        <div class="input-container">
+          <label for="textFormattingDropdown">Text Formatting</label>
+          <select id="textFormattingDropdown">
+            <option value="none">Raw Segments</option>
+            <option value="join">Joined Text</option>
+            <option value="advanced" selected>Advanced Paragraphs</option>
+          </select>
+        </div>
 
-            <option value="af">Afrikaans</option>
-            <option value="am">Amharic</option>
-            <option value="as">Assamese</option>
-            <option value="az">Azerbaijani</option>
-            <option value="ba">Bashkir</option>
-            <option value="be">Belarusian</option>
-            <option value="bg">Bulgarian</option>
-            <option value="bn">Bengali</option>
-            <option value="bo">Tibetan</option>
-            <option value="br">Breton</option>
-            <option value="bs">Bosnian</option>
-            <option value="ca">Catalan</option>
-            <option value="cs">Czech</option>
-            <option value="cy">Welsh</option>
-            <option value="da">Danish</option>
-            <option value="el">Greek</option>
-            <option value="eo">Esperanto</option>
-            <option value="et">Estonian</option>
-            <option value="eu">Basque</option>
-            <option value="fa">Persian</option>
-            <option value="fi">Finnish</option>
-            <option value="fo">Faroese</option>
-            <option value="ga">Irish</option>
-            <option value="gl">Galician</option>
-            <option value="gu">Gujarati</option>
-            <option value="ha">Hausa</option>
-            <option value="haw">Hawaiian</option>
-            <option value="he">Hebrew</option>
-            <option value="hr">Croatian</option>
-            <option value="ht">Haitian Creole</option>
-            <option value="hu">Hungarian</option>
-            <option value="hy">Armenian</option>
-            <option value="id">Indonesian</option>
-            <option value="is">Icelandic</option>
-            <option value="jw">Javanese</option>
-            <option value="ka">Georgian</option>
-            <option value="kk">Kazakh</option>
-            <option value="km">Khmer</option>
-            <option value="kn">Kannada</option>
-            <option value="ku">Kurdish</option>
-            <option value="ky">Kyrgyz</option>
-            <option value="la">Latin</option>
-            <option value="lb">Luxembourgish</option>
-            <option value="ln">Lingala</option>
-            <option value="lo">Lao</option>
-            <option value="lt">Lithuanian</option>
-            <option value="lv">Latvian</option>
-            <option value="mg">Malagasy</option>
-            <option value="mi">Maori</option>
-            <option value="mk">Macedonian</option>
-            <option value="ml">Malayalam</option>
-            <option value="mn">Mongolian</option>
-            <option value="mr">Marathi</option>
-            <option value="ms">Malay</option>
-            <option value="mt">Maltese</option>
-            <option value="my">Myanmar</option>
-            <option value="ne">Nepali</option>
-            <option value="nl">Dutch</option>
-            <option value="nn">Nynorsk</option>
-            <option value="no">Norwegian</option>
-            <option value="oc">Occitan</option>
-            <option value="or">Oriya</option>
-            <option value="pa">Punjabi</option>
-            <option value="pl">Polish</option>
-            <option value="ps">Pashto</option>
-            <option value="ro">Romanian</option>
-            <option value="sa">Sanskrit</option>
-            <option value="sd">Sindhi</option>
-            <option value="sh">Serbo-Croatian</option>
-            <option value="si">Sinhala</option>
-            <option value="sk">Slovak</option>
-            <option value="sl">Slovenian</option>
-            <option value="sn">Shona</option>
-            <option value="so">Somali</option>
-            <option value="sq">Albanian</option>
-            <option value="sr">Serbian</option>
-            <option value="su">Sundanese</option>
-            <option value="sv">Swedish</option>
-            <option value="sw">Swahili</option>
-            <option value="ta">Tamil</option>
-            <option value="te">Telugu</option>
-            <option value="tg">Tajik</option>
-            <option value="th">Thai</option>
-            <option value="tl">Tagalog</option>
-            <option value="tk">Turkmen</option>
-            <option value="tr">Turkish</option>
-            <option value="tt">Tatar</option>
-            <option value="ug">Uighur</option>
-            <option value="uk">Ukrainian</option>
-            <option value="ur">Urdu</option>
-            <option value="uz">Uzbek</option>
-            <option value="vi">Vietnamese</option>
-            <option value="vo">Volapuk</option>
-            <option value="wa">Walloon</option>
-            <option value="xh">Xhosa</option>
-            <option value="yi">Yiddish</option>
-            <option value="yo">Yoruba</option>
-            <option value="zu">Zulu</option>
-          </optgroup>
-        </select>
-      </div>
+        <div class="input-container">
+          <label for="displayModeDropdown">Display Mode</label>
+          <select id="displayModeDropdown">
+            <option value="original">Original Only</option>
+            <option value="translation">Translation Only</option>
+            <option value="both" selected>Side by Side</option>
+          </select>
+        </div>
 
-      <div class="input-container">
-        <label for="displayModeDropdown">Display Mode</label>
-        <select id="displayModeDropdown">
-          <option value="original">Original Only</option>
-          <option value="translation">Translation Only</option>
-          <option value="both" selected>Side by Side</option>
-        </select>
+        <div class="checkbox-container">
+          <input type="checkbox" id="hideLiveTextCheckbox">
+          <label for="hideLiveTextCheckbox">Hide Live Text (show only stable text)</label>
+        </div>
+
+        <div class="checkbox-container">
+          <input type="checkbox" id="useStandaloneCheckbox">
+          <label for="useStandaloneCheckbox">Show in Standalone Window</label>
+        </div>
+
+        <div class="checkbox-container">
+          <input type="checkbox" id="useVadCheckbox" checked>
+          <label for="useVadCheckbox">Voice Activity Detection</label>
+        </div>
+
       </div>
     </div>
-  </div>
 
-  <!-- LICENSE NOTICE — required by GPLv3 §5 for interactive user interfaces -->
-  <div style="
-    margin: 4px 16px 8px;
-    padding: 10px 14px;
-    border: 1px solid #334155;
-    border-radius: 8px;
-    background: rgba(15,23,42,0.6);
-    font-size: 10px;
-    color: #64748b;
-    line-height: 1.6;
-  ">
+    <!-- TTS -->
+    <h2>Speech (TTS)</h2>
+    <div class="section">
+      <div class="card">
+        
+        <div class="input-container">
+          <label for="wl_videoVolume">Original Video Volume</label>
+          <div class="row">
+            <input type="range" id="wl_videoVolume" min="0" max="1" step="0.05" value="1">
+            <span id="wl_videoVolumeValue">100%</span>
+          </div>
+        </div>
+        
+        <div class="input-container" style="margin-top:12px;">
+          <label for="wl_ttsSpeed">TTS Speed</label>
+          <div class="row">
+            <input type="range" id="wl_ttsSpeed" min="0.5" max="2.0" step="0.1" value="1.0">
+            <span id="wl_ttsSpeedValue">1.0x</span>
+          </div>
+        </div>
+        
+        <div class="checkbox-container">
+          <input type="checkbox" id="wl_enableTtsCheckbox">
+          <label for="wl_enableTtsCheckbox">Enable Speech (TTS)</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Translation -->
+    <h2>AI Translation</h2>
+    <div class="section">
+      <div class="card">
+        <div class="checkbox-container" style="margin-bottom:12px;">
+          <input type="checkbox" id="wl_enableGeminiTranslationCheckbox">
+          <label for="wl_enableGeminiTranslationCheckbox">Enable Translation</label>
+        </div>
+
+        <div class="input-container" id="wl_geminiApiKeyRow">
+          <label for="wl_geminiApiKey">Gemini API Key</label>
+          <input type="text" id="wl_geminiApiKey" placeholder="Paste Key Here" autocomplete="off">
+        </div>
+
+        <div class="input-container">
+          <label for="wl_geminiModelDropdown">Translation Engine</label>
+          <select id="wl_geminiModelDropdown">
+            <optgroup label="No API Key Required">
+              <option value="google-translate">Google Translate (free)</option>
+            </optgroup>
+            <optgroup label="Gemini Models (API Key required)">
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+              <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+              <option value="gemini-3.1-flash-lite-preview" selected>gemini-3.1-flash-lite-preview</option>
+              <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div class="input-container">
+          <label for="wl_targetLanguageDropdown">Target Language</label>
+          <select id="wl_targetLanguageDropdown">
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+            <option value="ru">Russian</option>
+            <option value="ar">Arabic</option>
+            <option value="hi">Hindi</option>
+            <option value="ko">Korean</option>
+            <optgroup label="Other Languages">
+              <option value="af">Afrikaans</option>
+              <option value="am">Amharic</option>
+              <option value="as">Assamese</option>
+              <option value="az">Azerbaijani</option>
+              <option value="ba">Bashkir</option>
+              <option value="be">Belarusian</option>
+              <option value="bg">Bulgarian</option>
+              <option value="bn">Bengali</option>
+              <option value="bo">Tibetan</option>
+              <option value="br">Breton</option>
+              <option value="bs">Bosnian</option>
+              <option value="ca">Catalan</option>
+              <option value="cs">Czech</option>
+              <option value="cy">Welsh</option>
+              <option value="da">Danish</option>
+              <option value="el">Greek</option>
+              <option value="eo">Esperanto</option>
+              <option value="et">Estonian</option>
+              <option value="eu">Basque</option>
+              <option value="fa">Persian</option>
+              <option value="fi">Finnish</option>
+              <option value="fo">Faroese</option>
+              <option value="ga">Irish</option>
+              <option value="gl">Galician</option>
+              <option value="gu">Gujarati</option>
+              <option value="ha">Hausa</option>
+              <option value="haw">Hawaiian</option>
+              <option value="he">Hebrew</option>
+              <option value="hr">Croatian</option>
+              <option value="ht">Haitian Creole</option>
+              <option value="hu">Hungarian</option>
+              <option value="hy">Armenian</option>
+              <option value="id">Indonesian</option>
+              <option value="is">Icelandic</option>
+              <option value="jw">Javanese</option>
+              <option value="ka">Georgian</option>
+              <option value="kk">Kazakh</option>
+              <option value="km">Khmer</option>
+              <option value="kn">Kannada</option>
+              <option value="ku">Kurdish</option>
+              <option value="ky">Kyrgyz</option>
+              <option value="la">Latin</option>
+              <option value="lb">Luxembourgish</option>
+              <option value="ln">Lingala</option>
+              <option value="lo">Lao</option>
+              <option value="lt">Lithuanian</option>
+              <option value="lv">Latvian</option>
+              <option value="mg">Malagasy</option>
+              <option value="mi">Maori</option>
+              <option value="mk">Macedonian</option>
+              <option value="ml">Malayalam</option>
+              <option value="mn">Mongolian</option>
+              <option value="mr">Marathi</option>
+              <option value="ms">Malay</option>
+              <option value="mt">Maltese</option>
+              <option value="my">Myanmar</option>
+              <option value="ne">Nepali</option>
+              <option value="nl">Dutch</option>
+              <option value="nn">Nynorsk</option>
+              <option value="no">Norwegian</option>
+              <option value="oc">Occitan</option>
+              <option value="or">Oriya</option>
+              <option value="pa">Punjabi</option>
+              <option value="pl">Polish</option>
+              <option value="ps">Pashto</option>
+              <option value="ro">Romanian</option>
+              <option value="sa">Sanskrit</option>
+              <option value="sd">Sindhi</option>
+              <option value="sh">Serbo-Croatian</option>
+              <option value="si">Sinhala</option>
+              <option value="sk">Slovak</option>
+              <option value="sl">Slovenian</option>
+              <option value="sn">Shona</option>
+              <option value="so">Somali</option>
+              <option value="sq">Albanian</option>
+              <option value="sr">Serbian</option>
+              <option value="su">Sundanese</option>
+              <option value="sv">Swedish</option>
+              <option value="sw">Swahili</option>
+              <option value="ta">Tamil</option>
+              <option value="te">Telugu</option>
+              <option value="tg">Tajik</option>
+              <option value="th">Thai</option>
+              <option value="tl">Tagalog</option>
+              <option value="tk">Turkmen</option>
+              <option value="tr">Turkish</option>
+              <option value="tt">Tatar</option>
+              <option value="ug">Uighur</option>
+              <option value="uk">Ukrainian</option>
+              <option value="ur">Urdu</option>
+              <option value="uz">Uzbek</option>
+              <option value="vi">Vietnamese</option>
+              <option value="vo">Volapuk</option>
+              <option value="wa">Walloon</option>
+              <option value="xh">Xhosa</option>
+              <option value="yi">Yiddish</option>
+              <option value="yo">Yoruba</option>
+              <option value="zu">Zulu</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /panelWhisper -->
+
+
+  <!-- ══ License ══ -->
+  <div class="license-box">
     <span style="font-weight:700;color:#94a3b8;">Audio Transcription</span>
+    &nbsp;&middot;&nbsp;Copyright &copy; 2026 Antonio Ruiz
     &nbsp;&middot;&nbsp;
-    Copyright &copy; 2026 Antonio Ruiz
-    &nbsp;&middot;&nbsp;
-    <a href="https://www.gnu.org/licenses/gpl-3.0.html"
-       target="_blank" rel="noopener noreferrer"
-       style="color:#60a5fa;text-decoration:none;">GPL-3.0-or-later</a>
-    <br>
-    This program comes with absolutely no warranty.
-    You may redistribute it under the terms of the GNU General Public License.
-    <br>
+    <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener noreferrer">GPL-3.0-or-later</a><br>
     Derived in part from
-    <a href="https://github.com/collabora/WhisperLive"
-       target="_blank" rel="noopener noreferrer"
-       style="color:#60a5fa;text-decoration:none;">collabora/WhisperLive</a>
-    &nbsp;&middot;&nbsp;
-    MIT &mdash; Copyright &copy; 2023 Vineet Suryan, Collabora Ltd.
+    <a href="https://github.com/collabora/WhisperLive" target="_blank" rel="noopener noreferrer">collabora/WhisperLive</a>
+    &nbsp;&middot;&nbsp;MIT &mdash; Copyright &copy; 2023 Vineet Suryan, Collabora Ltd.
   </div>
+  <div style="height:8px;"></div>
+
   <script src="popup.js"></script>
 </body>
-
 </html>

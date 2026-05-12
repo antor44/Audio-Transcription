@@ -35,6 +35,10 @@ let isTranslating = false;
 let translatedContextWindow = [];
 let recentOriginalFragments = [];
 
+// Subtitle TTS Mode state
+let subtitleTabId = null;
+let isSubtitleTtsActive = false;
+
 const MAX_CONTEXT_SIZE = 2;
 const MAX_RECENT_ORIGINALS = 20;
 const STARTUP_FLAG_KEY = "browserJustStarted";
@@ -194,14 +198,10 @@ function overlapSuffixPrefix(baseText, nextText, maxWords = 40, minWords = 3) {
   return 0;
 }
 
-// Spaceless-script detector for translation-output dedup and prompt context.
-// Same character ranges as SPACELESS_RE in content.js; duplicated here so
-// background.js remains self-contained (no shared module needed).
 const SPACELESS_RE_BG =
   /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0E7F\u1000-\u109F\u1780-\u17FF]/;
 
 function trimTranslatedPrefixOverlap(previousText, newText) {
-  // Primary path: word-overlap deduplication for space-separated scripts.
   const prev    = splitWords(previousText);
   const rawNew  = normalizeText(newText).split(/\s+/).filter(Boolean);
   const normNew = splitWords(newText);
@@ -215,8 +215,6 @@ function trimTranslatedPrefixOverlap(previousText, newText) {
     if (ok) return rawNew.slice(size).join(" ").trim();
   }
 
-  // Fallback for spaceless-script output (e.g. translating INTO Japanese/Chinese):
-  // word-split produces one huge token, so use character-level overlap instead.
   if (SPACELESS_RE_BG.test(normalizeText(newText))) {
     const prevFlat = normalizeText(previousText).replace(/\s+/g, "").slice(-60);
     const newFlat  = normalizeText(newText).replace(/\s+/g, "");
@@ -238,8 +236,6 @@ function resetTranslationContext() {
   } catch (e) {}
 }
 
-
-// --- Google Translate via unofficial endpoint (no API key needed) ---
 async function translateWithGoogle(text, targetLangCode) {
   const input = normalizeText(text);
   if (input.length < 3) return "";
@@ -257,7 +253,6 @@ async function translateWithGoogle(text, targetLangCode) {
       const response = await fetch(url.toString(), { signal: controller.signal });
       if (!response.ok) return "";
       const data = await response.json();
-      // Response structure: [["translated", "original"]] or {sentences:[{trans,orig}]}
       let result = "";
       if (Array.isArray(data) && Array.isArray(data[0])) {
         result = data.map(item => (Array.isArray(item) ? item[0] : "")).join("");
@@ -274,34 +269,21 @@ async function translateWithGoogle(text, targetLangCode) {
   }
 }
 
-// Build generation config and optional thinking config based on model name.
-// API schema differs by model family:
-//   - gemini-3.x models use thinkingLevel (string: "none"|"minimal"|"low")
-//   - gemini-2.5 models use thinkingBudget (integer tokens)
-// These are NOT interchangeable — sending the wrong schema is silently ignored
-// or may cause errors.
 function _buildGenerationConfig(model) {
   let thinkingConfig = null;
 
   if (model.match(/gemini-3(\.\d+)?.*pro/i)) {
-    // gemini-3.x-pro: thinkingLevel string API. "low" is the minimum accepted
-    // value that reliably works for Pro variants.
     thinkingConfig = { thinkingLevel: "low" };
   } else if (model.match(/gemini-3(\.\d+)?.*flash.*lite/i)) {
     thinkingConfig = { thinkingLevel: "minimal" };
   } else if (model.match(/gemini-3(\.\d+)?.*flash/i)) {
     thinkingConfig = { thinkingLevel: "minimal" };
   } else if (model.match(/gemini-2\.5.*pro/i)) {
-    // gemini-2.5-pro: thinkingBudget integer API. Budget:0 is unreliable per
-    // known API issues; 128 is a pragmatic low value that is honoured.
     thinkingConfig = { thinkingBudget: 128 };
   } else if (model.match(/gemini-2\.5.*flash/i)) {
     thinkingConfig = { thinkingBudget: 0 };
   }
 
-  // 1024 tokens gives enough headroom for a ~400-char source batch translated
-  // into any language. The previous value of 256 silently truncated larger
-  // batches (fast CJK streams), producing partial translation output.
   const generationConfig = { temperature: 0.1, maxOutputTokens: 1024 };
   if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
   return generationConfig;
@@ -314,8 +296,6 @@ const SAFETY_SETTINGS_OFF = [
   { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
 ];
 
-// Returns true if the model is a large/slow Pro variant that warrants
-// stricter timeouts to fail-fast to Google Translate.
 function _isProModel(model) {
   return /pro/i.test(model);
 }
@@ -351,11 +331,6 @@ async function _geminiAttempt(prompt, model, apiKey, timeoutMs) {
     }
 
     const data = await response.json();
-
-    // Thinking models (e.g. gemini-3.1-pro-preview) return multiple parts:
-    // the first part(s) may be internal thoughts (thought:true), and the
-    // actual translation is in the last non-thought part. Reading only
-    // parts[0] silently returns empty for these models.
     const parts = data?.candidates?.[0]?.content?.parts || [];
     const textPart = parts.find(p => !p.thought && typeof p.text === "string" && p.text.trim()) || parts[0];
     return normalizeText(textPart?.text || "");
@@ -364,13 +339,11 @@ async function _geminiAttempt(prompt, model, apiKey, timeoutMs) {
   }
 }
 
-// Build prompt: correction mode when source language == target language,
-// translation mode otherwise.
 function _buildPrompt(input, langName, isCorrection, shownTail) {
   const strictRule =
     "Output ONLY the plain subtitle text. " +
-    "No explanations, no notes, no markdown, no introductory phrases, " +
-    "no 'Aquí tienes', no corrections commentary, no asterisks. " +
+    "No explanations, no notes, no markdown, no introductory phrases in any language (e.g. 'Here is', 'Aquí tienes', 'Voici', 'Вот'), " +
+    "no corrections commentary, no asterisks. " +
     "Do NOT add, invent or infer any content not present verbatim in the input. " +
     "Just the raw text a human subtitle editor would write.";
 
@@ -387,8 +360,6 @@ function _buildPrompt(input, langName, isCorrection, shownTail) {
   const rawAnchor = shownTail || translatedContextWindow.join(" ");
   let anchor = "";
   if (rawAnchor) {
-    // For spaceless-script context (CJK, Thai…) split(/\s+/) produces one huge
-    // token — use the last N raw characters instead.
     if (SPACELESS_RE_BG.test(rawAnchor)) {
       anchor = rawAnchor.replace(/\s+/g, "").slice(-20);
     } else {
@@ -423,19 +394,16 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
     langName = displayNames.of(targetLangCode) || targetLangCode;
   } catch (e) {}
 
-  const isCorrection = !!(sourceLangCode &&
-    sourceLangCode !== "auto" && sourceLangCode !== "" &&
-    sourceLangCode === targetLangCode);
+  // Compare base language tags to allow corrections (e.g., 'en-US' matches 'en')
+  const slBase = (sourceLangCode || "").toLowerCase().split('-')[0];
+  const tlBase = (targetLangCode || "").toLowerCase().split('-')[0];
+  const isCorrection = !!(slBase && slBase !== "auto" && slBase === tlBase);
 
   const prompt = _buildPrompt(input, langName, isCorrection, shownTail);
-
-  // Pro models think before answering and can take 5-8 s easily.
-  // Strategy: 1 long attempt (8 s) instead of 2 short ones that always expire.
-  // Non-Pro models (flash, flash-lite): 2 attempts × 4 s each (max 8 s total).
   const isPro = _isProModel(model);
 
   let translated = "";
-  let geminiError = ""; // captures actual API error reason for the status bar
+  let geminiError = ""; 
 
   if (isPro) {
     try {
@@ -624,10 +592,11 @@ async function startCaptureInternal(options) {
   isCaptureStarting = true;
 
   try {
-    // Always send STOP to the previous source tab before starting a new session.
-    // capturingState.isCapturing can already be false (PiP activation, network
-    // drop, stream inactivity) while the content-script overlay is still alive.
-    // Sending STOP unconditionally closes any orphaned overlay.
+    if (isSubtitleTtsActive) {
+      await stopSubtitleTtsInternal();
+      await delay(250);
+    }
+
     const prevSourceTabId = await getStorageValue("captureSourceTabId");
     if (prevSourceTabId) {
       await sendMessageToTab(prevSourceTabId, { type: "STOP" });
@@ -657,19 +626,20 @@ async function startCaptureInternal(options) {
       await setStorage({ standaloneTabId: null });
     }
 
-    if (!options.useStandalone) {
-      const injected = await executeScriptInTab(sourceTab.id, "content.js");
-      if (!injected) {
-        throw new Error("Failed to inject content.js");
-      }
+    const injected = await executeScriptInTab(sourceTab.id, "content.js");
+    if (!injected) {
+      throw new Error("Failed to inject content.js");
+    }
+    await delay(120);
 
-      await delay(120);
-      await sendMessageToTab(sourceTab.id, { type: "resetSession" });
+    if (!options.useStandalone) {
+      await sendMessageToTab(sourceTab.id, { type: "resetSession", isSubtitleMode: false, isStandalone: false });
       await setStorage({
         currentTabId: sourceTab.id,
         captureSourceTabId: sourceTab.id
       });
     } else {
+      await sendMessageToTab(sourceTab.id, { type: "resetSession", isSubtitleMode: false, isStandalone: true });
       await setStorage({
         captureSourceTabId: sourceTab.id
       });
@@ -727,7 +697,7 @@ async function startCaptureInternal(options) {
       });
 
       await delay(500);
-      await sendMessageToTab(standaloneTabId, { type: "resetSession" });
+      await sendMessageToTab(standaloneTabId, { type: "resetSession", isSubtitleMode: false });
 
       await sendMessageToTab(optionTab.id, {
         type: "update_target",
@@ -749,10 +719,149 @@ function startCapture(options) {
   void Promise.resolve().then(() => startCaptureInternal(options));
 }
 
+function setSubtitleTtsState(isActive) {
+  isSubtitleTtsActive = isActive;
+  chrome.action.setBadgeText({ text: isActive ? "TTS" : "" });
+  if (!isActive) {
+    subtitleTabId = null;
+  }
+  chrome.storage.local.set({ isSubtitleTtsActive: !!isActive }).catch(()=>{});
+  safeSendRuntimeMessage({ action: "subtitleTtsStateChanged", isActive: !!isActive });
+}
+
+async function startSubtitleTtsInternal(tabId) {
+  const currentState = await getStorageValue("capturingState");
+  if (currentState?.isCapturing) {
+    await stopCaptureInternal();
+    await delay(250);
+  }
+
+  subtitleTabId = tabId;
+  setSubtitleTtsState(true);
+
+  const settings = await getStorage([
+    "targetLanguage",
+    "ttsSpeed",
+    "subtitlePlaybackControl",
+    "subtitleSlowdownRate",
+    "useStandalone",
+    "hideNativeSubtitles",
+    "subtitleVideoVolume",
+    "enableTts",
+    "enableGeminiTranslation"
+  ]);
+
+  if (!settings.useStandalone) {
+    const contentInjected = await executeScriptInTab(tabId, "content.js");
+    if (!contentInjected) {
+      console.warn("Failed to inject content.js for Subtitle TTS overlay.");
+    } else {
+      await setStorage({ currentTabId: tabId });
+      await delay(50);
+      await sendMessageToTab(tabId, { type: "resetSession", isSubtitleMode: true });
+    }
+  } else {
+    // Inject content.js purely for background volume control (invisible overlay)
+    await executeScriptInTab(tabId, "content.js");
+    await delay(50);
+    await sendMessageToTab(tabId, { type: "resetSession", isSubtitleMode: true, isStandalone: true });
+
+    const standaloneTabId = await openStandaloneWindow();
+    if (standaloneTabId) {
+      await setStorage({
+        standaloneTabId,
+        currentTabId: standaloneTabId
+      });
+      await delay(500);
+      await sendMessageToTab(standaloneTabId, { type: "resetSession", isSubtitleMode: true });
+    }
+  }
+
+  const injected = await executeScriptInTab(tabId, "subtitle_tts.js");
+  if (!injected) {
+    setSubtitleTtsState(false);
+    return { success: false, error: "Failed to inject subtitle_tts.js. Check that the page allows extensions." };
+  }
+
+  await delay(120);
+
+  const initMsg = {
+    type: "SUBTITLE_TTS_INIT",
+    settings: {
+      enableGeminiTranslation: !!settings.enableGeminiTranslation,
+      enableTts              : !!settings.enableTts,
+      targetLanguage         : settings.targetLanguage  || "en",
+      ttsSpeed               : parseFloat(settings.ttsSpeed)          || 1.0,
+      playbackControl        : settings.subtitlePlaybackControl        || "pause",
+      slowdownRate           : parseFloat(settings.subtitleSlowdownRate) || 0.6,
+      hideNativeSubtitles    : settings.hideNativeSubtitles !== false,
+      videoVolume            : parseFloat(settings.subtitleVideoVolume || "1.0")
+    }
+  };
+
+  const response = await sendMessageToTab(tabId, initMsg);
+
+  if (!response || response.success === false) {
+    setSubtitleTtsState(false);
+    const errorCode = response?.error || "no_track";
+    if (errorCode === "no_video") {
+      await sendMessageToTab(tabId, { type: "STOP" }).catch(()=>{});
+      return { success: false, error: "No video found on this page." };
+    }
+  }
+
+  await setStorage({ subtitleSourceTabId: tabId });
+  return { success: true };
+}
+
+async function stopSubtitleTtsInternal() {
+  const tabId = subtitleTabId || await getStorageValue("subtitleSourceTabId");
+
+  try { chrome.tts.stop(); } catch (e) {}
+
+  if (tabId) {
+    await sendMessageToTab(tabId, { type: "STOP_SUBTITLE_TTS" });
+    await sendMessageToTab(tabId, { type: "STOP" });
+  }
+
+  const standaloneTabId = await getStorageValue("standaloneTabId");
+  if (standaloneTabId) {
+    await sendMessageToTab(standaloneTabId, { type: "STOP" }).catch(()=>{});
+    await removeChromeTab(standaloneTabId).catch(()=>{});
+    await setStorage({ standaloneTabId: null });
+  }
+
+  subtitleTabId = null;
+  setSubtitleTtsState(false);
+  await setStorage({ subtitleSourceTabId: null });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
+    if (message.action === "detectTextLanguage") {
+      try {
+        chrome.i18n.detectLanguage(message.text, (result) => {
+          let lang = "";
+          if (result && result.isReliable && result.languages && result.languages.length > 0) {
+            lang = result.languages[0].language;
+          }
+          sendResponse({ language: lang });
+        });
+      } catch (e) {
+        sendResponse({ language: "" });
+      }
+      return true;
+    }
+
     if (message.action === "startCapture") {
       startCapture(message);
+      sendResponse({ success: true });
+      return false;
+    }
+
+    if (message.type === "STOP") {
+      stopCapture();
+      stopSubtitleTtsInternal().catch(()=>{});
       sendResponse({ success: true });
       return false;
     }
@@ -801,6 +910,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
+    if (message.type === "subtitle_display") {
+      getStorage(["currentTabId"]).then(res => {
+        if (res.currentTabId) {
+          sendMessageToTab(res.currentTabId, message).catch(() => {});
+        }
+      });
+      sendResponse({ success: true });
+      return true;
+    }
+
     if (message.action === "speakOriginalText") {
       getStorage(["enableTts", "selectedTask", "selectedLanguage"]).then((res) => {
         if (!res.enableTts) {
@@ -821,38 +940,131 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
+    if (message.action === "subtitleSpeak") {
+      const text   = normalizeText(message.text);
+      const lang   = message.lang   || "";
+      const rate   = Number.parseFloat(message.ttsSpeed) || 1.0;
+      const fromTabId = sender.tab?.id || subtitleTabId;
+
+      if (!text) {
+        if (fromTabId) {
+          sendMessageToTab(fromTabId, { type: "SUBTITLE_TTS_DONE" });
+        }
+        sendResponse({ success: true });
+        return false;
+      }
+
+      try { chrome.tts.stop(); } catch (e) {}
+
+      const options = {
+        rate   : Number.isFinite(rate) ? Math.max(0.1, Math.min(10, rate)) : 1.0,
+        pitch  : 1.0,
+        volume : 1.0,
+        enqueue: false,
+        onEvent: (event) => {
+          if (["end", "interrupted", "cancelled", "error"].includes(event.type)) {
+            if (fromTabId) {
+              try {
+                chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE" }, () => {
+                  void chrome.runtime.lastError;
+                });
+              } catch (e) {}
+            }
+          }
+        }
+      };
+
+      const executeSpeak = () => {
+        try {
+          chrome.tts.speak(text, options);
+        } catch (e) {
+          console.error("subtitleSpeak TTS error:", e);
+          if (fromTabId) {
+            try {
+              chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE" }, () => {
+                void chrome.runtime.lastError;
+              });
+            } catch (e2) {}
+          }
+        }
+      };
+
+      if (lang && lang.trim()) {
+        options.lang = lang;
+        executeSpeak();
+      } else {
+        getStorage(["selectedLanguage", "selectedTask"]).then(res => {
+          let fallbackLang = "";
+          if (res.selectedTask === "translate") fallbackLang = "en";
+          else if (res.selectedLanguage && res.selectedLanguage !== "AUTO") fallbackLang = res.selectedLanguage;
+
+          if (fallbackLang) {
+            options.lang = fallbackLang;
+            executeSpeak();
+          } else {
+            chrome.i18n.detectLanguage(text, (result) => {
+              if (result && result.isReliable && result.languages && result.languages.length > 0) {
+                options.lang = result.languages[0].language;
+              }
+              executeSpeak();
+            });
+          }
+        });
+      }
+
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === "startSubtitleTts") {
+      const tabId = message.tabId;
+      if (!tabId) {
+        sendResponse({ success: false, error: "No tab ID provided" });
+        return false;
+      }
+
+      startSubtitleTtsInternal(tabId)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+
+      return true;
+    }
+
+    if (message.action === "stopSubtitleTts") {
+      stopSubtitleTtsInternal()
+        .then(() => sendResponse({ success: true }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+    }
+
     if (message.action === "processTranslation") {
       getStorage(["geminiApiKey", "geminiModel", "targetLanguage", "enableTts", "selectedLanguage"])
         .then(async (res) => {
-          const targetLang = res.targetLanguage || "es";
-          const apiKey    = res.geminiApiKey || "";
-          const model     = res.geminiModel || "gemini-3.1-flash-lite-preview";
-          const sourceLang = res.selectedLanguage || "";
-          const shownTail  = normalizeText(message.shownTail || "");
+          const targetLang  = res.targetLanguage || "es";
+          const apiKey      = res.geminiApiKey || "";
+          const model       = res.geminiModel || "gemini-3.1-flash-lite-preview";
+          const sourceLang  = message.sourceLang !== undefined ? message.sourceLang : (res.selectedLanguage || "");
+          const shownTail   = normalizeText(message.shownTail || "");
+          const skipTts     = !!message.skipTts;
 
           let translated = "";
 
           if (model === "google-translate") {
             translated = await translateWithGoogle(message.text, targetLang);
           } else if (!apiKey) {
-            // No Gemini API key configured — fall back to Google Translate silently
-            // instead of surfacing an error that blocks all future translation.
             console.warn("Gemini API key not set, falling back to Google Translate.");
             translated = await translateWithGoogle(message.text, targetLang);
-            if (translated) translated = "\u207A " + translated; // prefix ⁺ to signal fallback
+            if (translated) translated = "\u207A " + translated; 
           } else {
             try {
               const result = await translateWithGemini(message.text, targetLang, model, apiKey, sourceLang, shownTail);
-              // translateWithGemini returns {text, geminiError} so the status bar
-              // can show the real API failure reason when Gemini falls back to GT.
               translated = result?.text ?? result ?? "";
               const geminiError = result?.geminiError || "";
-              if (res.enableTts && translated) {
+              if (!skipTts && res.enableTts && translated) {
                 const ttsText = translated.replace(/^\u207A\s*/, "");
                 speakText(ttsText, targetLang);
               }
               if (geminiError) {
-                // Surface the real Gemini error in the status bar.
                 console.warn("Gemini fallback to GT, reason:", geminiError);
                 sendResponse({ success: true, data: translated, geminiError });
               } else {
@@ -865,7 +1077,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
 
-          if (res.enableTts && translated) {
+          if (!skipTts && res.enableTts && translated) {
             const ttsText = translated.replace(/^\u207A\s*/, "");
             speakText(ttsText, targetLang);
           }
@@ -895,9 +1107,19 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === subtitleTabId) {
+    subtitleTabId = null;
+    setSubtitleTtsState(false);
+    chrome.storage.local.remove("subtitleSourceTabId");
+  }
+
   chrome.storage.local.get(
-    ["optionTabId", "currentTabId", "standaloneTabId", "captureSourceTabId", "capturingState"],
+    ["optionTabId", "currentTabId", "standaloneTabId", "captureSourceTabId", "capturingState", "isSubtitleTtsActive"],
     (result) => {
+      if (result?.isSubtitleTtsActive && tabId === result.standaloneTabId) {
+        stopSubtitleTtsInternal().catch(()=>{});
+      }
+
       if (!result?.capturingState?.isCapturing) return;
 
       const tracked = [
@@ -917,6 +1139,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== "loading" || !changeInfo.url) return;
+
+  if (tabId === subtitleTabId) {
+    subtitleTabId = null;
+    setSubtitleTtsState(false);
+    chrome.storage.local.remove("subtitleSourceTabId");
+    try { chrome.tts.stop(); } catch (e) {}
+  }
 
   chrome.storage.local.get(
     ["captureSourceTabId", "standaloneTabId", "capturingState"],
