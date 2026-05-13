@@ -360,7 +360,7 @@ You can launch the server with a double-click from Windows by creating a shortcu
 
 **To create the shortcut:**
 1. Right-click on the Desktop → **New → Shortcut**
-2. Paste one of the command below as the target
+2. Paste one of the commands below as the target
 3. Give it a name (e.g. *WhisperLive Server*)
 4. Click **Finish**
 
