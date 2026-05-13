@@ -171,7 +171,7 @@ pip install whisper-live
 and run the server with the upstream `run_server.py` exactly as described in the WhisperLive documentation.
 
 
-The recommended installation is the enhanced `run_server.py` version from this repository. The instructions below use a Python virtual environment mainly to improve dependency isolation, compatibility, and reproducibility. Depending on your operating system configuration, you may prefer to create a Python environment using `venv`, `virtualenv`, Conda, or a similar tool. You must activate this environment to run the WhisperLive server.
+The recommended installation is the enhanced `run_server.py` version from this repository. The instructions below use a Python virtual environment mainly to improve dependency isolation, compatibility, and reproducibility. Depending on your operating system configuration, you may prefer to create a Python environment using `venv`, `virtualenv`, [Conda](https://anaconda.org/), or a similar tool. You must activate this environment to run the WhisperLive server.
 
 ---
 
