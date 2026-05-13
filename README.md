@@ -36,7 +36,7 @@ This mode reads video subtitles aloud and translates them on the fly. It works w
 - **Display Mode:** Choose to view the "Original Only", "Translation Only", or "Side by Side".
 - **Show in Standalone Window:** Display the text in a dedicated, resizable popup window instead of an in-page overlay.
 - **Video During TTS (Playback Control):** 
-  - *Pause video:* Automatically pauses the video while the TTS is speaking to prevent overlapping audio.
+  - *Pause video:* Automatically pauses the video while the TTS is speaking to prevent audio desynchronization.
   - *Slow down video:* Reduces the video playback speed while the TTS is speaking.
   - *No control:* The video continues playing normally.
 - **Original Video Volume:** Control the volume of the background video (e.g., lower it to 20% so you can hear the TTS voice clearly over the original audio).
