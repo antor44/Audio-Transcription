@@ -358,6 +358,13 @@ Run the server script:
 
 You can launch the server with a double-click from Windows by creating a shortcut.
 
+**To create the shortcut:**
+1. Right-click on the Desktop → **New → Shortcut**
+2. Paste one of the command below as the target
+3. Give it a name (e.g. *WhisperLive Server*)
+4. Click **Finish**
+
+
 **Basic — if your environment is already configured in your shell profile:**
 ```
 C:\Windows\System32\wsl.exe -d Ubuntu --cd ~ bash --login -c "cd ~/Audio-Transcription && ./WhisperLive_server.sh; exec bash"
@@ -381,12 +388,6 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 > The `--login` flag is required. Without it, the shell launched by Windows does not load the user environment (PATH, CUDA variables, etc.), and the server will fail to start.
 > The `--cd ~` flag sets the starting directory to the Linux home folder — Windows shortcut targets cannot use Linux paths directly.
 > If your WSL distribution has a different name, replace `Ubuntu` with the name shown by running `wsl --list` in a Windows terminal.
-
-**To create the shortcut:**
-1. Right-click on the Desktop → **New → Shortcut**
-2. Paste the command above as the target
-3. Give it a name (e.g. *WhisperLive Server*)
-4. Click **Finish**
 
 ---
 
