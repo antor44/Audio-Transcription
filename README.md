@@ -22,7 +22,7 @@ Play any audio or video on a webpage. (If using the Subtitle TTS mode, ensure th
 > - **Grammar Correction Mode:** If you select the same language for both the source subtitles and your target translation (e.g., source English CC translated to target English), the extension will still send the text to the selected translation engine (like Google Gemini). This process **attempts to fix common grammar, spelling, and punctuation errors** from auto-generated subtitles before reading the text aloud.
 
 > [!NOTE]
-> **A Note on Language Auto-Detection:** The extension performs its own **language auto-detection** on the subtitles, since many video players do not correctly report the language of the subtitle track. This detection process can occasionally lead to initial errors, such as selecting the wrong TTS voice for the first few sentences or causing translation inaccuracies. In rare cases, this initial mismatch can cause the process to stall. If this occurs, the most reliable solution is to **reload the video page and restart the extension**.
+> **A Note on Language Auto-Detection:** The extension performs its own **language auto-detection** on the subtitles, since many video players do not correctly report the language of the subtitle track. This detection process can occasionally lead to initial errors, such as selecting the wrong TTS voice for the first few sentences or causing translation inaccuracies. In rare cases, this initial mismatch can cause the process to stall. If this occurs, it would also be better to choose the language in the  **Audio Language menu**, selecting the source language of the subtitles (not the audio). The most reliable solution is to **reload the video page and restart the extension**. 
 
 ### 3. Open the Extension
 Click the extension icon in your browser toolbar to open the options popup. You will notice the UI is divided into two main tabs:
@@ -33,7 +33,7 @@ Click the extension icon in your browser toolbar to open the options popup. You 
 This mode reads video subtitles aloud and translates them on the fly. It works with YouTube, Twitch (CC), and any HTML5 video that provides subtitle tracks.
 
 - **Hide Original YouTube Subtitles:** Automatically hides the native captions on the video player so they don't overlap with the extension's UI.
-- **Audio Language:** Select the source language of the audio, or leave it on "Auto Detect".
+- **Audio Language:** Select the source language of the subtitles, or leave it on "Auto Detect".
 - **Display Mode:** Choose to view the "Original Only", "Translation Only", or "Side by Side".
 - **Show in Standalone Window:** Display the text in a dedicated, resizable popup window instead of an in-page overlay.
 - **Video During TTS (Playback Control):** 
