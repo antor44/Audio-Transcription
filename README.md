@@ -83,7 +83,6 @@ Both tabs support real-time translation using advanced AI models:
 *   For reliable, high-quality subtitles or long sessions, use a **Paid Tier**—at least a Flash-Lite model or the Gemini-3-Flash model, which provides good results for major language translations and improves same-language transcription.
 *   Use `gemini-3.1-pro` when either the source or destination language is not a major language, although you might experience more translation failures due to its longer processing times.
 
-  *Note: Google plans to discontinue Gemini 2.5 Pro and Flash 2.5 models on June 17, 2026.*
 
 ---
 
