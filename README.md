@@ -1,4 +1,4 @@
-# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.0.0)
+# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.1.0)
 
 A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-time interpreter. It captures any audio playing in a tab (transcribing it via a local Whisper AI server) or reads existing video subtitles, translates them live, and reads the results back to you via Text-to-Speech (TTS) on the fly. 
 
@@ -33,6 +33,7 @@ Click the extension icon in your browser toolbar to open the options popup. You 
 This mode reads video subtitles aloud and translates them on the fly. It works with YouTube, Twitch (CC), and any HTML5 video that provides subtitle tracks.
 
 - **Hide Original YouTube Subtitles:** Automatically hides the native captions on the video player so they don't overlap with the extension's UI.
+- **Audio Language:** Select the source language of the audio, or leave it on "Auto Detect".
 - **Display Mode:** Choose to view the "Original Only", "Translation Only", or "Side by Side".
 - **Show in Standalone Window:** Display the text in a dedicated, resizable popup window instead of an in-page overlay.
 - **Video During TTS (Playback Control):** 
