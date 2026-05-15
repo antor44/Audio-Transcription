@@ -30,9 +30,9 @@
 
 window.__subtitleTtsApi = (function () {
 
-  const DEB_COMMIT      = 1500;  // ms — wait after last word before committing
-  const MIN_WORDS_PUNCT = 2;     // commit early if sentence ends with ≥N words
-  const HARD_COMMIT     = 25;    // force commit at this word count
+  const DEB_COMMIT      = 1500;  // base timeout
+  const MIN_WORDS_PUNCT = 1;     // commit early if sentence ends with ≥N words
+  const HARD_COMMIT     = 35;    // force commit at this word count to allow longer sentences
   const MAX_AGE         = 30000;
   const MAX_Q           = 6;
   const MAX_COMMITTED   = 120;   // sliding window of committed words for dedup
@@ -49,14 +49,15 @@ window.__subtitleTtsApi = (function () {
   let debTimer       = null;
 
   let cfg = {
-    playbackControl: 'pause', slowdownRate: 0.6,
+    playbackControl: 'pause', slowdownRate: 0.8,
     enableGeminiTranslation: false, enableTts: false,
-    targetLanguage: 'en', ttsSpeed: 1.0, trackLang: '',
+    targetLanguage: 'en', ttsSpeed: 1.0, trackLang: '', sttsSelectedLanguage: '',
     hideNativeSubtitles: true, videoVolume: 1.0
   };
 
   const originalVideoVolumes = new Map();
-  const SKIP = /auto.?generat|automatically|inaccurat|turn off subtitle|keyboard shortcut|^\s*\[|generados automáticamente|autogenerado|générés automatiquement|automatisch erzeugt|automatisch generiert|gerado automaticamente|generato automaticamente|создано автоматически|自动生成|自動產生|自動生成|자동 생성|تم إنشاؤه تلقائيًا|स्वचालित रूप से उत्पन्न/i;
+  // We only skip labels like [music] or purely auto-generated tags. We don't skip short 1-word valid subtitles like "Yes."
+  const SKIP = /auto.?generat|automatically|inaccurat|turn off subtitle|keyboard shortcut|^\[[a-z\s]+\]$/i;
 
   // Utilities
   function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
@@ -71,17 +72,16 @@ window.__subtitleTtsApi = (function () {
     );
   }
 
-  function skip(t) { return !t || SKIP.test(t) || t.length < 2; }
+  function skip(t) { return !t || SKIP.test(t); }
 
   function sentenceEnds(words) {
-    return /[.!?]$/.test(words[words.length - 1] || '');
+    return /[.!?\u2026\u3002\uFF01\uFF1F]["'\])}»\u201D\u2019]*$/.test(words[words.length - 1] || '');
   }
 
   // Normalize a word for comparison: lowercase + strip trailing punctuation.
   function nw(w) { return w.toLowerCase().replace(/[.,!?;:'"\u2026\u2019]+$/, ''); }
 
   // Strictly match suffix of history with prefix of incoming, OR if history-suffix is prepended.
-  // This solves word-clipping issues caused by matching parts in the middle.
   function committedPrefixLength(committed, incoming) {
     const normCom = committed.map(nw);
     const normInc = incoming.map(nw);
@@ -159,7 +159,19 @@ window.__subtitleTtsApi = (function () {
     if (stopped) return;
 
     const clean = cleanSubtitle(rawText || '');
-    if (!clean) { lastSeenText = ''; return; }
+    
+    // If the subtitle disappears (empty cue), accelerate flush timeout if pending words exist
+    if (!clean) { 
+      if (lastSeenText !== '') {
+        lastSeenText = '';
+        if (pendingWords.length > 0) {
+          clearTimeout(debTimer);
+          debTimer = setTimeout(flushPending, 1500);
+        }
+      }
+      return; 
+    }
+
     if (clean === lastSeenText) return;
     lastSeenText = clean;
 
@@ -179,8 +191,17 @@ window.__subtitleTtsApi = (function () {
     if (skip_ > 0 || pendingWords.length === 0) {
       pendingWords = [...pendingWords, ...fresh];
     } else {
-      flushPending();
-      pendingWords = fresh;
+      // For consecutive cues with NO overlap, check if previous ended in punctuation.
+      // If not, append it continuously to connect broken sentences.
+      const lastWord = pendingWords[pendingWords.length - 1] || '';
+      const hasStrongPunct = /[.!?\u2026\u3002\uFF01\uFF1F]["'\])}»\u201D\u2019]*$/.test(lastWord);
+      
+      if (hasStrongPunct) {
+        flushPending();
+        pendingWords = fresh;
+      } else {
+        pendingWords = [...pendingWords, ...fresh];
+      }
     }
 
     evaluateCommit();
@@ -192,12 +213,17 @@ window.__subtitleTtsApi = (function () {
 
     if (wc >= HARD_COMMIT) { flushPending(); return; }
 
-    if (sentenceEnds(pendingWords) && wc >= MIN_WORDS_PUNCT) {
-      debTimer = setTimeout(flushPending, 400);
-      return;
-    }
+    const lastWord = pendingWords[pendingWords.length - 1] || '';
+    const hasStrongPunct = /[.!?\u2026\u3002\uFF01\uFF1F]["'\])}»\u201D\u2019]*$/.test(lastWord);
+    const hasWeakPunct = /[,;:\-]["'\])}»\u201D\u2019]*$/.test(lastWord);
 
-    debTimer = setTimeout(flushPending, DEB_COMMIT);
+    if (hasStrongPunct && wc >= MIN_WORDS_PUNCT) {
+      debTimer = setTimeout(flushPending, 400); // Fast flush when detecting period
+    } else if (hasWeakPunct && wc >= 4) {
+      debTimer = setTimeout(flushPending, 2000); // Medium flush for commas
+    } else {
+      debTimer = setTimeout(flushPending, 6000); // Allow time to fetch the next continuous cue
+    }
   }
 
   function flushPending() {
@@ -257,10 +283,10 @@ window.__subtitleTtsApi = (function () {
   }
 
   // Display
-  function showContent(orig, disp, statusText) {
+  function showContent(orig, disp, statusText, currentSrcLang) {
     try {
       chrome.runtime.sendMessage(
-        { type: 'subtitle_display', data: { original: orig, translated: disp, statusText: statusText, trackLang: cfg.trackLang } },
+        { type: 'subtitle_display', data: { original: orig, translated: disp, statusText: statusText, trackLang: currentSrcLang } },
         () => void chrome.runtime.lastError
       );
     } catch(e) {}
@@ -332,7 +358,7 @@ window.__subtitleTtsApi = (function () {
 
   function commitText(text) {
     const t = norm(text);
-    if (skip(t) || t.split(' ').filter(Boolean).length < 2) return;
+    if (skip(t)) return;
 
     cueQueue.push({ text: t, ts: Date.now() });
     console.log('[SubtitleTTS] commit:', t.slice(0, 80));
@@ -347,7 +373,7 @@ window.__subtitleTtsApi = (function () {
     if (!stopped) processQueue();
   }
 
-  function processQueue() {
+  async function processQueue() {
     if (stopped || isSpeaking || !cueQueue.length) return;
     const now = Date.now();
     while (cueQueue.length && (now - cueQueue[0].ts) > MAX_AGE) cueQueue.shift();
@@ -358,31 +384,35 @@ window.__subtitleTtsApi = (function () {
     isSpeaking = true;
     syncVideoSpeed();
 
+    let currentSrcLang = cfg.sttsSelectedLanguage || cfg.trackLang;
+
     // Auto-detect language natively if missing and we have enough text
-    if (!cfg.trackLang && item.text.trim().length >= 3) {
+    if (!currentSrcLang && item.text.trim().length >= 3) {
       try {
-        chrome.runtime.sendMessage({ action: 'detectTextLanguage', text: item.text }, (res) => {
-          if (res && res.language && !cfg.trackLang) {
-            cfg.trackLang = res.language;
-            showContent(null, null, undefined); // Force header UI update
-          }
+        const res = await new Promise(resolve => {
+           chrome.runtime.sendMessage({ action: 'detectTextLanguage', text: item.text }, resolve);
         });
+        if (res && res.language) {
+          currentSrcLang = res.language;
+          cfg.trackLang = res.language;
+          showContent(null, null, undefined, currentSrcLang); 
+        }
       } catch(e) {}
     }
 
     const needsTrans = cfg.enableGeminiTranslation;
 
     if (needsTrans) {
-      showContent(item.text, '', 'Translating...');
+      showContent(item.text, '', 'Translating...', currentSrcLang);
       const tail = recentTrans.slice(-2).join(' ');
-      chrome.runtime.sendMessage({ action: 'processTranslation', text: item.text, shownTail: tail, skipTts: true, sourceLang: cfg.trackLang }, (r) => {
+      chrome.runtime.sendMessage({ action: 'processTranslation', text: item.text, shownTail: tail, skipTts: true, sourceLang: currentSrcLang }, (r) => {
         void chrome.runtime.lastError;
         if (stopped) { isSpeaking = false; isTtsSpeaking = false; restoreCtrl(); return; }
         
         const rawData = norm(r?.data || '');
         const cleanTr = rawData.replace(/^\u207A\s*/, '');
         const st = rawData || item.text;
-        const lang = cleanTr ? cfg.targetLanguage : (cfg.trackLang || '');
+        const lang = cleanTr ? cfg.targetLanguage : (currentSrcLang || '');
         const geminiError = r?.geminiError || '';
         
         let statusMsg = cleanTr ? 'Translation Active' : '';
@@ -391,14 +421,14 @@ window.__subtitleTtsApi = (function () {
 
         if (cleanTr) { recentTrans.push(cleanTr); if (recentTrans.length > 10) recentTrans.shift(); }
         
-        showContent(item.text, st, statusMsg);
+        showContent(item.text, st, statusMsg, currentSrcLang);
         
         if (cfg.enableTts) { isTtsSpeaking = true; ttsId = setTimeout(onDone, 20000); speak(cleanTr || item.text, lang); }
         else setTimeout(onDone, 50);
       });
     } else {
-      showContent(item.text, '', '');
-      if (cfg.enableTts) { isTtsSpeaking = true; ttsId = setTimeout(onDone, 20000); speak(item.text, cfg.trackLang || ''); }
+      showContent(item.text, '', '', currentSrcLang);
+      if (cfg.enableTts) { isTtsSpeaking = true; ttsId = setTimeout(onDone, 20000); speak(item.text, currentSrcLang || ''); }
       else setTimeout(onDone, 50);
     }
   }
@@ -433,7 +463,19 @@ window.__subtitleTtsApi = (function () {
 
     const bgSearch = setInterval(() => {
       if (stopped) { clearInterval(bgSearch); return; }
-      applyVideoVolume(false); // keep volume enforced when navigating videos
+      
+      const currentVideo = findVideo();
+      if (currentVideo !== videoEl) {
+        if (obs) { obs.disconnect(); obs = null; activeSel = null; }
+        if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+        videoEl = currentVideo;
+        applyVideoVolume(true); 
+      } else {
+        applyVideoVolume(false); 
+      }
+
+      if (!videoEl) return;
+
       if (!activeTrack && !obs) {
         const t = findTrack(videoEl);
         if (t) {
@@ -442,12 +484,16 @@ window.__subtitleTtsApi = (function () {
           if (activeTrack.mode === 'disabled') activeTrack.mode = 'hidden';
           activeTrack.addEventListener('cuechange', onCueChange);
           console.log('[SubtitleTTS] TextTrack lang:', cfg.trackLang);
-          clearInterval(bgSearch);
         } else {
           const sel = findDom();
-          if (sel && startObs(sel)) { console.log('[SubtitleTTS] DOM obs attached.'); clearInterval(bgSearch); }
+          if (sel && startObs(sel)) { console.log('[SubtitleTTS] DOM obs attached.'); }
         }
-      } else { clearInterval(bgSearch); }
+      } else if (activeTrack && activeTrack.mode === 'disabled') {
+         activeTrack.removeEventListener('cuechange', onCueChange);
+         activeTrack = null;
+      } else if (obs && activeSel && !document.querySelector(activeSel.c)) {
+         obs.disconnect(); obs = null; activeSel = null;
+      }
     }, 1000);
 
     return { success: true };
@@ -488,6 +534,7 @@ window.__subtitleTtsApi = (function () {
     if (changes.subtitleSlowdownRate)       cfg.slowdownRate            = parseFloat(changes.subtitleSlowdownRate.newValue) || 0.8;
     if (changes.enableGeminiTranslation)    cfg.enableGeminiTranslation = !!changes.enableGeminiTranslation.newValue;
     if (changes.targetLanguage)             cfg.targetLanguage          = changes.targetLanguage.newValue || 'en';
+    if (changes.sttsSelectedLanguage)       cfg.sttsSelectedLanguage    = changes.sttsSelectedLanguage.newValue || '';
     if (changes.ttsSpeed)                   cfg.ttsSpeed                = parseFloat(changes.ttsSpeed.newValue) || 1.0;
     if (changes.enableTts)                  cfg.enableTts               = !!changes.enableTts.newValue;
     if (changes.subtitleVideoVolume !== undefined) {

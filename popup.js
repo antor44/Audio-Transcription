@@ -28,11 +28,45 @@
  * THIRD_PARTY_NOTICES.md.
  */
 
+const MAIN_LANGS = [
+  ['en','English'],['es','Spanish'],['fr','French'],
+  ['de','German'],['it','Italian'],['pt','Portuguese'],['ja','Japanese'],
+  ['zh','Chinese'],['ru','Russian'],['ar','Arabic'],['hi','Hindi'],['ko','Korean']
+];
+
+const OTHER_LANGS = [
+  ['af','Afrikaans'],['am','Amharic'],['as','Assamese'],['az','Azerbaijani'],
+  ['ba','Bashkir'],['be','Belarusian'],['bg','Bulgarian'],['bn','Bengali'],
+  ['bo','Tibetan'],['br','Breton'],['bs','Bosnian'],['ca','Catalan'],
+  ['cs','Czech'],['cy','Welsh'],['da','Danish'],['el','Greek'],
+  ['eo','Esperanto'],['et','Estonian'],['eu','Basque'],['fa','Persian'],
+  ['fi','Finnish'],['fo','Faroese'],['ga','Irish'],['gl','Galician'],
+  ['gu','Gujarati'],['ha','Hausa'],['haw','Hawaiian'],['he','Hebrew'],
+  ['hr','Croatian'],['ht','Haitian Creole'],['hu','Hungarian'],['hy','Armenian'],
+  ['id','Indonesian'],['is','Icelandic'],['jw','Javanese'],['ka','Georgian'],
+  ['kk','Kazakh'],['km','Khmer'],['kn','Kannada'],['ku','Kurdish'],
+  ['ky','Kyrgyz'],['la','Latin'],['lb','Luxembourgish'],['ln','Lingala'],
+  ['lo','Lao'],['lt','Lithuanian'],['lv','Latvian'],['mg','Malagasy'],
+  ['mi','Maori'],['mk','Macedonian'],['ml','Malayalam'],['mn','Mongolian'],
+  ['mr','Marathi'],['ms','Malay'],['mt','Maltese'],['my','Myanmar'],
+  ['ne','Nepali'],['nl','Dutch'],['nn','Nynorsk'],['no','Norwegian'],
+  ['oc','Occitan'],['or','Oriya'],['pa','Punjabi'],['pl','Polish'],
+  ['ps','Pashto'],['ro','Romanian'],['sa','Sanskrit'],['sd','Sindhi'],
+  ['sh','Serbo-Croatian'],['si','Sinhala'],['sk','Slovak'],['sl','Slovenian'],
+  ['sn','Shona'],['so','Somali'],['sq','Albanian'],['sr','Serbian'],
+  ['su','Sundanese'],['sv','Swedish'],['sw','Swahili'],['ta','Tamil'],
+  ['te','Telugu'],['tg','Tajik'],['th','Thai'],['tk','Turkmen'],
+  ['tl','Tagalog'],['tr','Turkish'],['tt','Tatar'],['ug','Uighur'],
+  ['uk','Ukrainian'],['ur','Urdu'],['uz','Uzbek'],['vi','Vietnamese'],
+  ['vo','Volapuk'],['wa','Walloon'],['xh','Xhosa'],['yi','Yiddish'],
+  ['yo','Yoruba'],['zu','Zulu']
+];
+
 const DEFAULTS = {
   serverHost:'localhost', serverPort:'9090',
-  selectedLanguage:'', selectedTask:'transcribe', selectedModelSize:'small',
+  selectedLanguage:'', sttsSelectedLanguage:'', selectedTask:'transcribe', selectedModelSize:'small',
   textFormatting:'advanced', transcriptionProfile:'balanced', hideLiveText:false,
-  geminiApiKey:'', geminiModel:'gemini-3.1-flash-lite-preview',
+  geminiApiKey:'', geminiModel:'gemini-3.1-flash-lite',
   targetLanguage:'es', displayMode:'both',
   useVad:true, useStandalone:false,
   enableTts:false, ttsSpeed:'1.2',
@@ -47,6 +81,39 @@ let fullApiKey = '';
 let fullWlApiKey = '';
 
 function $(id){ return document.getElementById(id); }
+
+// Language dropdown population with optgroups
+function populateLangSelect(selectEl, selected, isWhisperMode, isTarget) {
+  if (!selectEl) return;
+  selectEl.innerHTML = '';
+  
+  if (!isTarget) {
+    const autoOpt = document.createElement('option');
+    autoOpt.value = '';
+    autoOpt.textContent = isWhisperMode ? 'Auto Detect (Whisper)' : 'Auto Detect';
+    if ('' === selected) autoOpt.selected = true;
+    selectEl.appendChild(autoOpt);
+  }
+
+  MAIN_LANGS.forEach(([val, label]) => {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = label;
+    if (val === selected) opt.selected = true;
+    selectEl.appendChild(opt);
+  });
+
+  const optgroup = document.createElement('optgroup');
+  optgroup.label = "Other Languages";
+  
+  OTHER_LANGS.forEach(([val, label]) => {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = label;
+    if (val === selected) opt.selected = true;
+    optgroup.appendChild(opt);
+  });
+  
+  selectEl.appendChild(optgroup);
+}
 
 // Tab switching
 function switchTab(tabName) {
@@ -88,6 +155,7 @@ function initElements() {
   el.startSubtitleTtsButton = $('startSubtitleTts');
   el.stopSubtitleTtsButton  = $('stopSubtitleTts');
   el.subtitleTtsStatus      = $('subtitleTtsStatus');
+  el.stts_languageDropdown  = $('stts_languageDropdown');
   el.subtitlePlaybackControl= $('subtitlePlaybackControl');
   el.subtitleSlowdownRate   = $('subtitleSlowdownRate');
   el.subtitleSlowdownRateValue=$('subtitleSlowdownRateValue');
@@ -105,6 +173,7 @@ function initElements() {
   el.geminiApiKeyRow        = $('geminiApiKeyRow');
   el.geminiModelDropdown    = $('geminiModelDropdown');
   el.targetLanguageDropdown = $('targetLanguageDropdown');
+  
   el.startButton            = $('startCapture');
   el.stopButton             = $('stopCapture');
   el.connectionStatus       = $('connectionStatus');
@@ -168,6 +237,7 @@ function collectSettings(){
     serverHost: normalizeHost(el.ipAddress?.value),
     serverPort: normalizePort(el.port?.value),
     selectedLanguage: el.languageDropdown?.value||'',
+    sttsSelectedLanguage: el.stts_languageDropdown?.value||'',
     selectedTask: el.taskDropdown?.value||DEFAULTS.selectedTask,
     selectedModelSize: el.modelSizeDropdown?.value||DEFAULTS.selectedModelSize,
     textFormatting: el.textFormattingDropdown?.value||DEFAULTS.textFormatting,
@@ -195,6 +265,7 @@ async function saveSettings(){
     serverHost:s.serverHost, serverPort:s.serverPort,
     ipAddress:s.serverHost, port:s.serverPort,
     selectedLanguage:s.selectedLanguage||null,
+    sttsSelectedLanguage:s.sttsSelectedLanguage||'',
     selectedTask:s.selectedTask, selectedModelSize:s.selectedModelSize,
     textFormatting:s.textFormatting, transcriptionProfile:s.transcriptionProfile,
     hideLiveText:s.hideLiveText, geminiApiKey:s.geminiApiKey,
@@ -213,7 +284,12 @@ async function saveSettings(){
 function applySettingsToUI(s){
   if(el.ipAddress) el.ipAddress.value=s.serverHost??DEFAULTS.serverHost;
   if(el.port) el.port.value=s.serverPort??DEFAULTS.serverPort;
-  if(el.languageDropdown) el.languageDropdown.value=s.selectedLanguage??'';
+  
+  populateLangSelect(el.languageDropdown, s.selectedLanguage, true, false);
+  populateLangSelect(el.stts_languageDropdown, s.sttsSelectedLanguage, false, false);
+  populateLangSelect(el.targetLanguageDropdown, s.targetLanguage, false, true);
+  populateLangSelect(el.wl_targetLanguageDropdown, s.targetLanguage, true, true);
+
   if(el.taskDropdown) el.taskDropdown.value=s.selectedTask??DEFAULTS.selectedTask;
   if(el.modelSizeDropdown) el.modelSizeDropdown.value=s.selectedModelSize??DEFAULTS.selectedModelSize;
   if(el.textFormattingDropdown) el.textFormattingDropdown.value=s.textFormatting??DEFAULTS.textFormatting;
@@ -239,9 +315,6 @@ function applySettingsToUI(s){
   const gm=s.geminiModel??DEFAULTS.geminiModel;
   if(el.geminiModelDropdown) el.geminiModelDropdown.value=gm;
   if(el.wl_geminiModelDropdown) el.wl_geminiModelDropdown.value=gm;
-  const tl=s.targetLanguage??DEFAULTS.targetLanguage;
-  if(el.targetLanguageDropdown) el.targetLanguageDropdown.value=tl;
-  if(el.wl_targetLanguageDropdown) el.wl_targetLanguageDropdown.value=tl;
   const ge=s.enableGeminiTranslation??false;
   if(el.enableGeminiTranslationCheckbox) el.enableGeminiTranslationCheckbox.checked=ge;
   if(el.wl_enableGeminiTranslationCheckbox) el.wl_enableGeminiTranslationCheckbox.checked=ge;
@@ -264,7 +337,8 @@ async function loadSettings(){
     ...DEFAULTS,...stored,
     serverHost:stored.serverHost||stored.ipAddress||DEFAULTS.serverHost,
     serverPort:stored.serverPort||stored.port||DEFAULTS.serverPort,
-    selectedLanguage:(stored.selectedLanguage===undefined||stored.selectedLanguage===null)?'':stored.selectedLanguage
+    selectedLanguage:(stored.selectedLanguage===undefined||stored.selectedLanguage===null)?'':stored.selectedLanguage,
+    sttsSelectedLanguage:stored.sttsSelectedLanguage||''
   };
   applySettingsToUI(s);
   setButtonsFromState(!!stored?.capturingState?.isCapturing||!!stored?.isCapturing);
@@ -315,7 +389,7 @@ function bindAutosave(){
   const ctrls=[
     el.enableTtsCheckbox, el.enableGeminiTranslationCheckbox,
     el.useStandaloneCheckbox, el.useVadCheckbox, el.hideLiveTextCheckbox,
-    el.ipAddress, el.port, el.languageDropdown, el.taskDropdown,
+    el.ipAddress, el.port, el.languageDropdown, el.stts_languageDropdown, el.taskDropdown,
     el.modelSizeDropdown, el.textFormattingDropdown, el.transcriptionProfileDropdown,
     el.geminiModelDropdown, el.targetLanguageDropdown, el.displayModeDropdown,
     el.subtitlePlaybackControl, el.hideNativeSubtitles,

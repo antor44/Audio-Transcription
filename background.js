@@ -37,7 +37,6 @@ let recentOriginalFragments = [];
 
 // Subtitle TTS Mode state
 let subtitleTabId = null;
-let isSubtitleTtsActive = false;
 
 const MAX_CONTEXT_SIZE = 2;
 const MAX_RECENT_ORIGINALS = 20;
@@ -269,26 +268,6 @@ async function translateWithGoogle(text, targetLangCode) {
   }
 }
 
-function _buildGenerationConfig(model) {
-  let thinkingConfig = null;
-
-  if (model.match(/gemini-3(\.\d+)?.*pro/i)) {
-    thinkingConfig = { thinkingLevel: "low" };
-  } else if (model.match(/gemini-3(\.\d+)?.*flash.*lite/i)) {
-    thinkingConfig = { thinkingLevel: "minimal" };
-  } else if (model.match(/gemini-3(\.\d+)?.*flash/i)) {
-    thinkingConfig = { thinkingLevel: "minimal" };
-  } else if (model.match(/gemini-2\.5.*pro/i)) {
-    thinkingConfig = { thinkingBudget: 128 };
-  } else if (model.match(/gemini-2\.5.*flash/i)) {
-    thinkingConfig = { thinkingBudget: 0 };
-  }
-
-  const generationConfig = { temperature: 0.1, maxOutputTokens: 1024 };
-  if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
-  return generationConfig;
-}
-
 const SAFETY_SETTINGS_OFF = [
   { category: "HARM_CATEGORY_HARASSMENT",       threshold: "BLOCK_NONE" },
   { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
@@ -301,16 +280,28 @@ function _isProModel(model) {
 }
 
 async function _geminiAttempt(prompt, model, apiKey, timeoutMs) {
+  const isGemma = model.toLowerCase().includes("gemma");
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const isGemma = model.includes("gemma");
     const body = {
-      contents: [{ parts: [{ text: prompt }] }],
-      safetySettings: SAFETY_SETTINGS_OFF
+      contents: [{ parts: [{ text: prompt }] }]
     };
+
+    if (model.match(/gemini-3(\.\d+)?.*pro/i)) {
+      body.generationConfig = { temperature: 0.1, maxOutputTokens: 1024, thinkingConfig: { thinkingLevel: "low" } };
+    } else if (model.match(/gemini-3(\.\d+)?.*flash/i)) {
+      body.generationConfig = { temperature: 0.1, maxOutputTokens: 1024, thinkingConfig: { thinkingLevel: "minimal" } };
+    } else if (isGemma) {
+      body.generationConfig = { temperature: 0.1, thinkingConfig: { thinkingLevel: "MINIMAL" } };
+    } else {
+      body.generationConfig = { temperature: 0.1, maxOutputTokens: 1024 };
+    }
+
     if (!isGemma) {
-      body.generationConfig = _buildGenerationConfig(model);
+      body.safetySettings = SAFETY_SETTINGS_OFF;
     }
 
     const response = await fetch(
@@ -394,7 +385,6 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
     langName = displayNames.of(targetLangCode) || targetLangCode;
   } catch (e) {}
 
-  // Compare base language tags to allow corrections (e.g., 'en-US' matches 'en')
   const slBase = (sourceLangCode || "").toLowerCase().split('-')[0];
   const tlBase = (targetLangCode || "").toLowerCase().split('-')[0];
   const isCorrection = !!(slBase && slBase !== "auto" && slBase === tlBase);
@@ -592,7 +582,8 @@ async function startCaptureInternal(options) {
   isCaptureStarting = true;
 
   try {
-    if (isSubtitleTtsActive) {
+    const isSubTTSActive = await getStorageValue("isSubtitleTtsActive");
+    if (isSubTTSActive) {
       await stopSubtitleTtsInternal();
       await delay(250);
     }
@@ -720,7 +711,6 @@ function startCapture(options) {
 }
 
 function setSubtitleTtsState(isActive) {
-  isSubtitleTtsActive = isActive;
   chrome.action.setBadgeText({ text: isActive ? "TTS" : "" });
   if (!isActive) {
     subtitleTabId = null;
@@ -748,7 +738,8 @@ async function startSubtitleTtsInternal(tabId) {
     "hideNativeSubtitles",
     "subtitleVideoVolume",
     "enableTts",
-    "enableGeminiTranslation"
+    "enableGeminiTranslation",
+    "sttsSelectedLanguage"
   ]);
 
   if (!settings.useStandalone) {
@@ -761,7 +752,6 @@ async function startSubtitleTtsInternal(tabId) {
       await sendMessageToTab(tabId, { type: "resetSession", isSubtitleMode: true });
     }
   } else {
-    // Inject content.js purely for background volume control (invisible overlay)
     await executeScriptInTab(tabId, "content.js");
     await delay(50);
     await sendMessageToTab(tabId, { type: "resetSession", isSubtitleMode: true, isStandalone: true });
@@ -791,9 +781,10 @@ async function startSubtitleTtsInternal(tabId) {
       enableGeminiTranslation: !!settings.enableGeminiTranslation,
       enableTts              : !!settings.enableTts,
       targetLanguage         : settings.targetLanguage  || "en",
+      sttsSelectedLanguage   : settings.sttsSelectedLanguage || "",
       ttsSpeed               : parseFloat(settings.ttsSpeed)          || 1.0,
       playbackControl        : settings.subtitlePlaybackControl        || "pause",
-      slowdownRate           : parseFloat(settings.subtitleSlowdownRate) || 0.6,
+      slowdownRate           : parseFloat(settings.subtitleSlowdownRate) || 0.8,
       hideNativeSubtitles    : settings.hideNativeSubtitles !== false,
       videoVolume            : parseFloat(settings.subtitleVideoVolume || "1.0")
     }
@@ -820,8 +811,8 @@ async function stopSubtitleTtsInternal() {
   try { chrome.tts.stop(); } catch (e) {}
 
   if (tabId) {
-    await sendMessageToTab(tabId, { type: "STOP_SUBTITLE_TTS" });
-    await sendMessageToTab(tabId, { type: "STOP" });
+    await sendMessageToTab(tabId, { type: "STOP_SUBTITLE_TTS" }).catch(()=>{});
+    await sendMessageToTab(tabId, { type: "STOP" }).catch(()=>{});
   }
 
   const standaloneTabId = await getStorageValue("standaloneTabId");
@@ -833,7 +824,7 @@ async function stopSubtitleTtsInternal() {
 
   subtitleTabId = null;
   setSubtitleTtsState(false);
-  await setStorage({ subtitleSourceTabId: null });
+  await setStorage({ subtitleSourceTabId: null, isSubtitleTtsActive: false });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -1042,7 +1033,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(async (res) => {
           const targetLang  = res.targetLanguage || "es";
           const apiKey      = res.geminiApiKey || "";
-          const model       = res.geminiModel || "gemini-3.1-flash-lite-preview";
+          const model       = res.geminiModel || "gemini-3.1-flash-lite";
           const sourceLang  = message.sourceLang !== undefined ? message.sourceLang : (res.selectedLanguage || "");
           const shownTail   = normalizeText(message.shownTail || "");
           const skipTts     = !!message.skipTts;
@@ -1107,21 +1098,17 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === subtitleTabId) {
-    subtitleTabId = null;
-    setSubtitleTtsState(false);
-    chrome.storage.local.remove("subtitleSourceTabId");
-  }
-
   chrome.storage.local.get(
-    ["optionTabId", "currentTabId", "standaloneTabId", "captureSourceTabId", "capturingState", "isSubtitleTtsActive"],
+    ["optionTabId", "currentTabId", "standaloneTabId", "captureSourceTabId", "capturingState", "isSubtitleTtsActive", "subtitleSourceTabId"],
     (result) => {
-      if (result?.isSubtitleTtsActive && tabId === result.standaloneTabId) {
+      // Subtitle TTS UI Cleanup
+      if (result?.isSubtitleTtsActive && (tabId === result.standaloneTabId || tabId === result.subtitleSourceTabId)) {
         stopSubtitleTtsInternal().catch(()=>{});
+        return;
       }
 
+      // WhisperLive UI Cleanup
       if (!result?.capturingState?.isCapturing) return;
-
       const tracked = [
         result.optionTabId,
         result.currentTabId,
@@ -1140,16 +1127,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== "loading" || !changeInfo.url) return;
 
-  if (tabId === subtitleTabId) {
-    subtitleTabId = null;
-    setSubtitleTtsState(false);
-    chrome.storage.local.remove("subtitleSourceTabId");
-    try { chrome.tts.stop(); } catch (e) {}
-  }
-
   chrome.storage.local.get(
-    ["captureSourceTabId", "standaloneTabId", "capturingState"],
+    ["captureSourceTabId", "standaloneTabId", "capturingState", "subtitleSourceTabId", "isSubtitleTtsActive"],
     (result) => {
+      // Subtitle TTS Cleanup
+      if (result?.isSubtitleTtsActive && tabId === result.subtitleSourceTabId) {
+        stopSubtitleTtsInternal().catch(()=>{});
+        return;
+      }
+
+      // WhisperLive Cleanup
       if (!result?.capturingState?.isCapturing) return;
       if (result.standaloneTabId) return;
 
