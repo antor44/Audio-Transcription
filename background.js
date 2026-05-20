@@ -42,6 +42,19 @@ const MAX_CONTEXT_SIZE = 2;
 const MAX_RECENT_ORIGINALS = 20;
 const STARTUP_FLAG_KEY = "browserJustStarted";
 
+// WhisperLive TTS accumulation buffer — avoids speaking tiny fragments
+const TTS_BUFFER_MIN_WORDS    = 12;   // speak when we have at least this many words
+const TTS_BUFFER_MIN_CHARS    = 30;   // or this many chars for spaceless scripts
+const TTS_BUFFER_SILENCE_MS   = 1800; // flush anyway after this silence gap
+let   ttsBuffer               = "";   // accumulated translated text
+let   ttsBufferLang           = "";
+let   ttsFlushTimer           = null;
+
+const SPACELESS_RE = /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u1780-\u17FF]/;
+function isSpacelessScript(text) {
+  return SPACELESS_RE.test(text);
+}
+
 function delay(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -230,6 +243,10 @@ function trimTranslatedPrefixOverlap(previousText, newText) {
 function resetTranslationContext() {
   translatedContextWindow = [];
   recentOriginalFragments = [];
+  // Clear the WhisperLive TTS accumulation buffer
+  if (ttsFlushTimer) { clearTimeout(ttsFlushTimer); ttsFlushTimer = null; }
+  ttsBuffer = "";
+  ttsBufferLang = "";
   try {
     chrome.tts.stop();
   } catch (e) {}
@@ -237,7 +254,7 @@ function resetTranslationContext() {
 
 async function translateWithGoogle(text, targetLangCode) {
   const input = normalizeText(text);
-  if (input.length < 3) return "";
+  if (isSpacelessScript(input) ? input.length < 1 : input.length < 3) return "";
 
   try {
     const url = new URL("https://clients5.google.com/translate_a/t");
@@ -377,7 +394,7 @@ function _buildPrompt(input, langName, isCorrection, shownTail) {
 
 async function translateWithGemini(originalText, targetLangCode, model, apiKey, sourceLangCode, shownTail) {
   const input = normalizeText(originalText);
-  if (!apiKey || input.length < 3) return "";
+  if (!apiKey || (isSpacelessScript(input) ? input.length < 1 : input.length < 3)) return "";
 
   let langName = targetLangCode;
   try {
@@ -428,9 +445,16 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
 
   if (!translated) return { text: "", geminiError };
 
-  const contextEntry = shownTail
-    ? shownTail.split(/\s+/).filter(Boolean).slice(-20).join(" ") + " " + translated
-    : translated;
+  let contextEntry;
+  if (shownTail) {
+    if (isSpacelessScript(shownTail)) {
+      contextEntry = shownTail.replace(/\s+/g, "").slice(-40) + translated;
+    } else {
+      contextEntry = shownTail.split(/\s+/).filter(Boolean).slice(-20).join(" ") + " " + translated;
+    }
+  } else {
+    contextEntry = translated;
+  }
   translatedContextWindow.push(contextEntry);
   if (translatedContextWindow.length > MAX_CONTEXT_SIZE) {
     translatedContextWindow.shift();
@@ -440,7 +464,7 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
   return { text, geminiError: usedFallback ? geminiError : "" };
 }
 
-function speakText(text, lang) {
+function speakTextImmediate(text, lang) {
   const clean = normalizeText(text);
   if (!clean) return;
 
@@ -463,6 +487,39 @@ function speakText(text, lang) {
       console.error("TTS error:", e);
     }
   });
+}
+
+function flushTtsBuffer() {
+  if (ttsFlushTimer) { clearTimeout(ttsFlushTimer); ttsFlushTimer = null; }
+  const text = ttsBuffer.trim();
+  const lang = ttsBufferLang;
+  ttsBuffer = "";
+  ttsBufferLang = "";
+  if (text) speakTextImmediate(text, lang);
+}
+
+function speakText(text, lang) {
+  const clean = normalizeText(text);
+  if (!clean) return;
+
+  // Append to buffer (keep lang from the first/only lang seen)
+  if (ttsBuffer && lang && !ttsBufferLang) ttsBufferLang = lang;
+  if (!ttsBufferLang && lang) ttsBufferLang = lang;
+  ttsBuffer = ttsBuffer ? ttsBuffer + " " + clean : clean;
+
+  // Count words or chars depending on script type
+  const wordCount = isSpacelessScript(ttsBuffer)
+    ? ttsBuffer.replace(/\s+/g, "").length
+    : ttsBuffer.split(/\s+/).filter(Boolean).length;
+  const threshold = isSpacelessScript(ttsBuffer) ? TTS_BUFFER_MIN_CHARS : TTS_BUFFER_MIN_WORDS;
+
+  if (wordCount >= threshold) {
+    flushTtsBuffer();
+  } else {
+    // Flush after silence gap
+    if (ttsFlushTimer) clearTimeout(ttsFlushTimer);
+    ttsFlushTimer = setTimeout(flushTtsBuffer, TTS_BUFFER_SILENCE_MS);
+  }
 }
 
 function setCapturingState(isCapturing) {
@@ -617,20 +674,29 @@ async function startCaptureInternal(options) {
       await setStorage({ standaloneTabId: null });
     }
 
-    const injected = await executeScriptInTab(sourceTab.id, "content.js");
-    if (!injected) {
-      throw new Error("Failed to inject content.js");
-    }
-    await delay(120);
-
     if (!options.useStandalone) {
+      // Embedded Overlay Mode: Script injection is strictly required to display the UI overlay
+      const injected = await executeScriptInTab(sourceTab.id, "content.js");
+      if (!injected) {
+        throw new Error("Failed to inject content.js");
+      }
+      await delay(120);
       await sendMessageToTab(sourceTab.id, { type: "resetSession", isSubtitleMode: false, isStandalone: false });
       await setStorage({
         currentTabId: sourceTab.id,
         captureSourceTabId: sourceTab.id
       });
     } else {
-      await sendMessageToTab(sourceTab.id, { type: "resetSession", isSubtitleMode: false, isStandalone: true });
+      // Standalone Mode: Attempt best-effort script injection to manage volume, but ignore failures on protected pages
+      try {
+        const injected = await executeScriptInTab(sourceTab.id, "content.js");
+        if (injected) {
+          await delay(120);
+          await sendMessageToTab(sourceTab.id, { type: "resetSession", isSubtitleMode: false, isStandalone: true });
+        }
+      } catch (e) {
+        console.warn("Could not inject volume controller on protected source tab. Proceeding with Standalone Mode anyway.", e);
+      }
       await setStorage({
         captureSourceTabId: sourceTab.id
       });
@@ -891,6 +957,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === "stopTts") {
+      if (ttsFlushTimer) { clearTimeout(ttsFlushTimer); ttsFlushTimer = null; }
+      ttsBuffer = "";
+      ttsBufferLang = "";
       try { chrome.tts.stop(); } catch (e) {}
       sendResponse({ success: true });
       return false;
@@ -1102,7 +1171,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     ["optionTabId", "currentTabId", "standaloneTabId", "captureSourceTabId", "capturingState", "isSubtitleTtsActive", "subtitleSourceTabId"],
     (result) => {
       // Subtitle TTS UI Cleanup
-      if (result?.isSubtitleTtsActive && (tabId === result.standaloneTabId || tabId === result.subtitleSourceTabId)) {
+      // Also check in-memory subtitleTabId to handle the rare race where storage
+      // hasn't been written yet (subtitleSourceTabId may still be null in storage).
+      const isSubtitleTab = tabId === result.standaloneTabId
+                         || tabId === result.subtitleSourceTabId
+                         || tabId === subtitleTabId;
+      if ((result?.isSubtitleTtsActive || subtitleTabId) && isSubtitleTab) {
         stopSubtitleTtsInternal().catch(()=>{});
         return;
       }
@@ -1125,7 +1199,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status !== "loading" || !changeInfo.url) return;
+  if (changeInfo.status !== "loading") return;
 
   chrome.storage.local.get(
     ["captureSourceTabId", "standaloneTabId", "capturingState", "subtitleSourceTabId", "isSubtitleTtsActive"],

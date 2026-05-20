@@ -33,7 +33,7 @@ if (window.__audioTranscriptionOverlayApi) {
 } else {
   window.__audioTranscriptionOverlayApi = (function () {
     const TEXT_BLOCK_STYLE =
-      "padding:0 16px 10px 16px;display:block;white-space:pre-wrap !important;word-break:break-word !important;";
+      "padding:0 16px 10px 16px;display:block;white-space:pre-wrap !important;word-break:break-word !important;line-height:1.5;";
     const BUTTON_STYLE =
       "padding:2px 8px;cursor:pointer;background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.22);color:#fff;border-radius:6px;font-size:12px;font-weight:700;";
 
@@ -100,14 +100,10 @@ if (window.__audioTranscriptionOverlayApi) {
       try {
         document.querySelectorAll('video').forEach(v => {
           if (v.offsetWidth > 0) {
-            let isNew = false;
             if (!originalVideoVolumes.has(v)) {
               originalVideoVolumes.set(v, v.volume);
-              isNew = true;
             }
-            if (force || isNew) {
-              v.volume = Math.max(0, Math.min(1, subtitleVideoVolume));
-            }
+            v.volume = Math.max(0, Math.min(1, subtitleVideoVolume));
           }
         });
       } catch(e) {}
@@ -213,6 +209,21 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function calculateTextSimilarity(a, b) {
+      const isSpaceless = isSpacelessScript(a) || isSpacelessScript(b);
+      if (isSpaceless) {
+        const cleanA = a.replace(/\s+/g, "");
+        const cleanB = b.replace(/\s+/g, "");
+        if (!cleanA.length || !cleanB.length) return 0;
+        
+        const setA = new Set(cleanA);
+        const setB = new Set(cleanB);
+        let intersection = 0;
+        for (const char of setB) {
+          if (setA.has(char)) intersection++;
+        }
+        return intersection / Math.max(setA.size, setB.size);
+      }
+
       const wa = splitWords(a);
       const wb = splitWords(b);
       if (!wa.length || !wb.length) return 0;
@@ -223,31 +234,125 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function trimPrefixOverlap(baseText, candidateText, maxWords = 80, minWords = 3) {
+      const isSpaceless = isSpacelessScript(baseText) || isSpacelessScript(candidateText);
+      if (isSpaceless) {
+        const cleanBase = baseText.replace(/\s+/g, "");
+        const cleanCand = candidateText.replace(/\s+/g, "");
+        const maxChars = Math.min(100, cleanBase.length, cleanCand.length);
+        const minChars = 2;
+        for (let size = maxChars; size >= minChars; size--) {
+          const suffix = cleanBase.slice(-size);
+          const prefix = cleanCand.slice(0, size);
+          if (suffix === prefix) {
+            let charsMatched = 0;
+            let candIdx = 0;
+            while (candIdx < candidateText.length && charsMatched < size) {
+              if (!/\s/.test(candidateText[candIdx])) {
+                charsMatched++;
+              }
+              candIdx++;
+            }
+            return normalizeText(candidateText.slice(candIdx));
+          }
+        }
+        for (let size = maxChars; size >= Math.max(4, minChars); size--) {
+          const suffix = cleanBase.slice(-size);
+          const idx = cleanCand.indexOf(suffix);
+          if (idx !== -1) {
+            let charsMatched = 0;
+            let candIdx = 0;
+            const targetCharCount = idx + size;
+            while (candIdx < candidateText.length && charsMatched < targetCharCount) {
+              if (!/\s/.test(candidateText[candIdx])) {
+                charsMatched++;
+              }
+              candIdx++;
+            }
+            return normalizeText(candidateText.slice(candIdx));
+          }
+        }
+        return normalizeText(candidateText);
+      }
+
       const baseWords = splitWords(baseText);
+      const rawCandidateWords = normalizeText(candidateText).split(/\s+/).filter(Boolean);
       const candidateWords = splitWords(candidateText);
       const max = Math.min(maxWords, baseWords.length, candidateWords.length);
+
       for (let size = max; size >= minWords; size--) {
         let ok = true;
         for (let i = 0; i < size; i++) {
           if (baseWords[baseWords.length - size + i] !== candidateWords[i]) { ok = false; break; }
         }
-        if (ok) {
-          let strippedText = normalizeText(candidateText);
-          let matchCount = 0;
-          let removeUpTo = 0;
-          const wordRegex = /[^\s]+/g;
-          let match;
-          while ((match = wordRegex.exec(strippedText)) !== null) {
-            matchCount++;
-            if (matchCount === size) { removeUpTo = wordRegex.lastIndex; break; }
+        if (ok) return rawCandidateWords.slice(size).join(" ").trim();
+      }
+
+      const minAnywhere = Math.max(4, minWords);
+      for (let size = max; size >= minAnywhere; size--) {
+        const suffix = baseWords.slice(baseWords.length - size);
+        let matchIdx = -1;
+        for (let j = 0; j <= candidateWords.length - size; j++) {
+          let match = true;
+          for (let k = 0; k < size; k++) {
+            if (suffix[k] !== candidateWords[j + k]) {
+              match = false;
+              break;
+            }
           }
-          return normalizeText(strippedText.slice(removeUpTo));
+          if (match) {
+            matchIdx = j;
+            break;
+          }
+        }
+        if (matchIdx !== -1) {
+          return rawCandidateWords.slice(matchIdx + size).join(" ").trim();
         }
       }
+
       return normalizeText(candidateText);
     }
 
     function trimPrefixOverlapRaw(baseText, rawCandidateText, maxWords = 80, minWords = 3) {
+      const isSpaceless = isSpacelessScript(baseText) || isSpacelessScript(rawCandidateText);
+      if (isSpaceless) {
+        const cleanBase = baseText.replace(/\s+/g, "");
+        const cleanCand = rawCandidateText.replace(/\s+/g, "");
+        const maxChars = Math.min(100, cleanBase.length, cleanCand.length);
+        const minChars = 2;
+        for (let size = maxChars; size >= minChars; size--) {
+          const suffix = cleanBase.slice(-size);
+          const prefix = cleanCand.slice(0, size);
+          if (suffix === prefix) {
+            let charsMatched = 0;
+            let candIdx = 0;
+            while (candIdx < rawCandidateText.length && charsMatched < size) {
+              if (!/\s/.test(rawCandidateText[candIdx])) {
+                charsMatched++;
+              }
+              candIdx++;
+            }
+            return rawCandidateText.slice(candIdx).replace(/^[ \t\r\n]+/, "");
+          }
+        }
+        for (let size = maxChars; size >= Math.max(4, minChars); size--) {
+          const suffix = cleanBase.slice(-size);
+          const idx = cleanCand.indexOf(suffix);
+          if (idx !== -1) {
+            let charsMatched = 0;
+            let candIdx = 0;
+            const targetCharCount = idx + size;
+            while (candIdx < rawCandidateText.length && charsMatched < targetCharCount) {
+              if (!/\s/.test(rawCandidateText[candIdx])) {
+                charsMatched++;
+              }
+              candIdx++;
+            }
+            return rawCandidateText.slice(candIdx).replace(/^[ \t\r\n]+/, "");
+          }
+        }
+        return rawCandidateText;
+      }
+
       const baseWords = splitWords(baseText);
       const candidateWords = splitWords(rawCandidateText);
       const max = Math.min(maxWords, baseWords.length, candidateWords.length);
@@ -268,10 +373,65 @@ if (window.__audioTranscriptionOverlayApi) {
           return rawCandidateText.slice(removeUpTo).replace(/^[ \t\r\n]+/, "");
         }
       }
+
+      const minAnywhere = Math.max(4, minWords);
+      for (let size = max; size >= minAnywhere; size--) {
+        const suffix = baseWords.slice(baseWords.length - size);
+        let matchIdx = -1;
+        for (let j = 0; j <= candidateWords.length - size; j++) {
+          let match = true;
+          for (let k = 0; k < size; k++) {
+            if (suffix[k] !== candidateWords[j + k]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) {
+            matchIdx = j;
+            break;
+          }
+        }
+        if (matchIdx !== -1) {
+          let matchCount = 0;
+          let removeUpTo = 0;
+          const targetWords = matchIdx + size;
+          const wordRegex = /\S+/g;
+          let m;
+          while ((m = wordRegex.exec(rawCandidateText)) !== null) {
+            matchCount++;
+            if (matchCount === targetWords) { removeUpTo = wordRegex.lastIndex; break; }
+          }
+          return rawCandidateText.slice(removeUpTo).replace(/^[ \t\r\n]+/, "");
+        }
+      }
+
       return rawCandidateText;
     }
 
     function removeInternalRepetitions(text, minMatchWords = 6) {
+      const isSpaceless = isSpacelessScript(text);
+      if (isSpaceless) {
+        const clean = text.replace(/\s+/g, "");
+        const minMatchChars = Math.max(2, Math.floor(minMatchWords / 2));
+        if (clean.length < minMatchChars * 2) return text;
+        
+        for (let i = minMatchChars; i < clean.length; i++) {
+          const maxLen = Math.min(25, clean.length - i);
+          for (let len = maxLen; len >= minMatchChars; len--) {
+            for (let j = 0; j <= i - len; j++) {
+              let match = true;
+              for (let k = 0; k < len; k++) {
+                if (clean[j + k] !== clean[i + k]) { match = false; break; }
+              }
+              if (match) {
+                return clean.slice(0, i) + clean.slice(i + len);
+              }
+            }
+          }
+        }
+        return text;
+      }
+
       const words = normalizeText(text).split(/\s+/).filter(Boolean);
       if (words.length < minMatchWords * 2) return text;
       const low = words.map(w => stripPunctuation(w));
@@ -304,15 +464,100 @@ if (window.__audioTranscriptionOverlayApi) {
         return clean.replace(/([.!?\u2026\u3002\uFF01\uFF1F\u061F])\s+/g, "$1\n");
       }
 
-      let flat = clean.replace(/\n+/g, " ");
+      let flat = clean.replace(/\n{2,}/g, "\u0000").replace(/\n/g, " ").replace(/\u0000/g, "\n\n");
+
+      // Fix space before punctuation: "hello ." → "hello."
+      flat = flat.replace(/\s+([.!?,;:])/g, "$1");
+
+      // Fix duplicate or chained dots: "hello.. world" → "hello. world"
+      flat = flat.replace(/\.{2,}/g, ".");
+
+      // Capitalize first letter after sentence-ending punctuation
+      flat = flat.replace(
+        /([.!?]\s+)([a-záéíóúàèìòùäëïöüâêîôûa-z])/gu,
+        (_, punct, letter) => punct + letter.toUpperCase()
+      );
+
+      // Capitalize the very first character
+      flat = flat.replace(/^([a-záéíóúàèìòùäëïöüâêîôûa-z])/u,
+        (_, letter) => letter.toUpperCase()
+      );
+
       if (formatting === "join") {
         return flat;
       }
 
-      return flat.replace(
-        /(?<!\b\p{L})(?<!\b(?:EE|UU|Sr|Sra|Dr|Dra|Mr|Mrs|Ms|Prof|St|Mt|etc|vs|cf|ie|eg|al|Ud|Vd|vd|ud|av|Av))([.!?\u2026\u061F\u3002\uFF01\uFF1F]+["')\]»"]*)\s+(?=[\p{Lu}\p{Lo}\p{N}¿¡«"(\['"])/gu,
-        "$1\n"
-      );
+      // Advanced: Group sentences into paragraphs dynamically based on original pauses and deterministic limits (3 to 5 periods)
+      const getDeterministicLimit = (strText) => {
+        let hash = 0;
+        const s = String(strText || "");
+        for (let idx = 0; idx < s.length; idx++) {
+          hash = (hash << 5) - hash + s.charCodeAt(idx);
+          hash |= 0;
+        }
+        return 3 + (Math.abs(hash) % 3); // Return stable, fixed 3, 4, or 5
+      };
+
+      const rawParagraphs = flat.split(/\n+/).map(p => p.trim()).filter(Boolean);
+      const processedParagraphs = [];
+      
+      let currentParagraphWords = [];
+      let currentParagraphPeriods = 0;
+      let randomPeriodLimit = 4; // Stable initial seed limit
+      
+      for (let pIdx = 0; pIdx < rawParagraphs.length; pIdx++) {
+        const paragraphText = rawParagraphs[pIdx];
+        const sentenceBoundaryRegex = /(?<!\b\p{L})(?<!\b(?:EE|UU|Sr|Sra|Dr|Dra|Mr|Mrs|Ms|Prof|St|Mt|etc|vs|cf|ie|eg|al|Ud|Vd|vd|ud|av|Av))([.!?\u2026\u061F\u3002\uFF01\uFF1F]+["')\]»"]*)\s+/gu;
+        
+        let sentences = [];
+        let lastIdx = 0;
+        let match;
+        while ((match = sentenceBoundaryRegex.exec(paragraphText)) !== null) {
+          sentences.push(paragraphText.substring(lastIdx, sentenceBoundaryRegex.lastIndex).trim());
+          lastIdx = sentenceBoundaryRegex.lastIndex;
+        }
+        const remainder = paragraphText.substring(lastIdx).trim();
+        if (remainder) {
+          sentences.push(remainder);
+        }
+        
+        for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
+          const sentence = sentences[sIdx];
+          currentParagraphWords.push(sentence);
+          
+          if (/[.!?\u2026\u3002\uFF01\uFF1F\u061F]/.test(sentence)) {
+            currentParagraphPeriods++;
+            // Calculate a deterministic limit based on the unique character composition of this sentence
+            randomPeriodLimit = getDeterministicLimit(sentence);
+          }
+          
+          const currentWordCount = currentParagraphWords.join(" ").split(/\s+/).length;
+          
+          // Break paragraph if we hit the dynamic deterministic limit or paragraph gets too long
+          if (currentParagraphPeriods >= randomPeriodLimit || currentWordCount > 80) {
+            processedParagraphs.push(currentParagraphWords.join(" "));
+            currentParagraphWords = [];
+            currentParagraphPeriods = 0;
+            randomPeriodLimit = 4;
+          }
+        }
+        
+        // Natural pause boundary: Commit break only if current paragraph has enough content (>25 words)
+        // to prevent isolated single-sentence lines.
+        const currentAccumulatedWordCount = currentParagraphWords.join(" ").split(/\s+/).filter(Boolean).length;
+        if (currentAccumulatedWordCount >= 25 && currentParagraphWords.length > 0) {
+          processedParagraphs.push(currentParagraphWords.join(" "));
+          currentParagraphWords = [];
+          currentParagraphPeriods = 0;
+          randomPeriodLimit = 4;
+        }
+      }
+      
+      if (currentParagraphWords.length > 0) {
+        processedParagraphs.push(currentParagraphWords.join(" "));
+      }
+      
+      return processedParagraphs.join("\n").replace(/[ \t]+/g, " ").replace(/\n /g, "\n").replace(/ \n/g, "\n").trim();
     }
 
     function splitIntoFlushableChunks(text, forceFlush = false) {
@@ -671,11 +916,12 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function getVisibleOriginalText() {
       if (currentFormatting === "none") {
-        const recentRaw = historyChunksRaw.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-        return recentRaw + (pendingStableText ? "\n" + pendingStableText : "");
+        const recentRaw = historyChunksRaw.map(c => String(c || "").trim()).filter(Boolean).join("\n");
+        return recentRaw + (pendingStableText ? "\n" + pendingStableText.trim() : "");
       }
-      const fullText = historyChunks.join(" ");
-      return normalizeText(`${fullText}${pendingStableText ? ` ${pendingStableText}` : ""}`);
+      let joined = historyChunks.join(" ");
+      joined = joined.replace(/\n\s+/g, "\n");
+      return normalizeText(`${joined}${pendingStableText ? ` ${pendingStableText}` : ""}`);
     }
 
     function applyDisplayMode() {
@@ -688,8 +934,8 @@ if (window.__audioTranscriptionOverlayApi) {
         mainWrapperEl.style.overflow      = "hidden";
       }
 
-      transcriptionOriginalEl.style.overflowY = "auto";
-      transcriptionTranslatedEl.style.overflowY = "auto";
+      transcriptionOriginalEl.style.overflowY = "scroll";
+      transcriptionTranslatedEl.style.overflowY = "scroll";
 
       const hasTransHistory = isSubtitleMode ? subtitleTranslatedHistory.length > 0 : translatedChunks.length > 0;
       const isTransActive = enableGeminiTranslation || hasTransHistory;
@@ -797,14 +1043,17 @@ if (window.__audioTranscriptionOverlayApi) {
       clearSilenceMonitor();
       const P = activeProfile;
       silenceFlushTimer = setInterval(() => {
-        applyVideoVolume(false);
+        chrome.storage.local.get(["isCapturing"], (res) => {
+          const isWhisperActive = !!res?.isCapturing;
+          if (isSubtitleMode || isWhisperActive) applyVideoVolume(false);
+        });
         if (isStandaloneHidden) return;
         const now = Date.now();
         if (now - lastReceivedTime > P.silenceFlushMs) {
           if (previousSegments.length > 0) {
             previousSegments.forEach(seg => {
               if (seg && !seg._committed && seg.text && seg.text.trim()) {
-                appendCommittedChunk(seg.text.trim());
+                appendCommittedChunk(seg.text.trim() + "\n");
                 seg._committed = true;
               }
             });
@@ -879,7 +1128,7 @@ if (window.__audioTranscriptionOverlayApi) {
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#94a3b8;letter-spacing:0.03em;line-height:1.5;min-height:18px;width:100%;">
             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">${statsHtml}</span>
-            ${statusText ? `<span title="${escapeHtml(statusText).replace(/"/g, '&quot;')}" style="flex-shrink:0;padding:2px 8px;border-radius:999px;background:${statusBg};border:1px solid ${statusBorder};color:${statusColor};font-weight:700;font-size:10px;white-space:nowrap;display:inline-flex;align-items:center;max-width:350px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(statusText)}</span>` : ""}
+            <span title="${escapeHtml(statusText).replace(/"/g, '&quot;')}" style="flex-shrink:0;padding:2px 8px;border-radius:999px;background:${statusBg};border:1px solid ${statusBorder};color:${statusColor};font-weight:700;font-size:10px;white-space:nowrap;display:inline-flex;align-items:center;max-width:350px;overflow:hidden;text-overflow:ellipsis;visibility:${statusText ? 'visible' : 'hidden'};">${escapeHtml(statusText || 'Idle')}</span>
           </div>
         </div>
       `;
@@ -1056,13 +1305,17 @@ if (window.__audioTranscriptionOverlayApi) {
       chrome.storage.local.get(
         ["textFormatting", "fontSize", "displayMode", "dividerPos", "selectedModelSize",
          "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts",
-         "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText", "isSubtitleTtsActive", "subtitleVideoVolume"],
+         "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText", "isSubtitleTtsActive", "subtitleVideoVolume", "isCapturing"],
         (res) => {
           subtitleVideoVolume = parseFloat(res.subtitleVideoVolume ?? "1.0");
-          applyVideoVolume(true);
 
           if (res.isSubtitleTtsActive) {
              isSubtitleMode = true;
+          }
+
+          const isWhisperActive = !!res.isCapturing;
+          if (isSubtitleMode || isWhisperActive) {
+            applyVideoVolume(true);
           }
 
           if (isStandaloneHidden) return;
@@ -1111,14 +1364,18 @@ if (window.__audioTranscriptionOverlayApi) {
       applySavedUiSettings();
     }
 
-    function hardRemoveOverlay() {
-      clearSilenceMonitor();
-      restoreVideoVolume();
+    function removeOverlayUIOnly() {
       if (resizeObserver) { try { resizeObserver.disconnect(); } catch (e) {} resizeObserver = null; }
       if (containerElement?.parentNode) containerElement.parentNode.removeChild(containerElement);
       if (waitPopupEl?.parentNode) waitPopupEl.parentNode.removeChild(waitPopupEl);
       containerElement = null; transcriptionHeaderEl = null; transcriptionOriginalEl = null;
       transcriptionTranslatedEl = null; dividerEl = null; mainWrapperEl = null; waitPopupEl = null;
+    }
+
+    function hardRemoveOverlay() {
+      clearSilenceMonitor();
+      restoreVideoVolume();
+      removeOverlayUIOnly();
     }
 
     function stopAndCloseOverlay() { stopTtsNow(); resetRuntimeState(); hardRemoveOverlay(); }
@@ -1128,7 +1385,7 @@ if (window.__audioTranscriptionOverlayApi) {
       currentTrackLang = "";
       
       if (isStandaloneHidden) {
-        hardRemoveOverlay();
+        removeOverlayUIOnly();
       } else {
         ensureOverlay(); 
       }
@@ -1169,7 +1426,9 @@ if (window.__audioTranscriptionOverlayApi) {
             activeProfile = newProfile;
             startSilenceMonitor();
           }
-          applyVideoVolume(false);
+          if (isSubtitleMode) {
+            applyVideoVolume(false);
+          }
           adjustFontSize(0);
           updateHeaderAndStatus(res || {});
           renderText();
@@ -1243,6 +1502,15 @@ if (window.__audioTranscriptionOverlayApi) {
         if ("subtitleVideoVolume" in changes) {
           subtitleVideoVolume = parseFloat(changes.subtitleVideoVolume.newValue || "1.0");
           applyVideoVolume(true);
+        }
+
+        if ("isCapturing" in changes) {
+          const isWhisperActive = !!changes.isCapturing.newValue;
+          if (isWhisperActive) {
+            applyVideoVolume(true);
+          } else if (!isSubtitleMode) {
+            restoreVideoVolume();
+          }
         }
 
         if (isStandaloneHidden) return;
