@@ -1,4 +1,4 @@
-# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.1.0)
+# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.1.2)
 
 A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-time interpreter. It captures any audio playing in a tab (transcribing it via a local Whisper AI server) or reads existing video subtitles, translates them live, and reads the results back to you via Text-to-Speech (TTS) on the fly. 
 
@@ -76,10 +76,10 @@ Both tabs support real-time translation using advanced AI models:
 
 > [!IMPORTANT]
 > **Note on Gemini Models & Pricing:**
-> While many models such as the `gemini-flash-lite-preview` family offer generous free tiers, advanced models like `gemini-3.1-pro` are typically available only through the paid tier of the Gemini API. The paid API operates on a pay-per-use basis: if you don't use it, you don't pay. Please check your billing status if you plan to use Pro models or expect intensive usage of Flash models. Under normal usage, the cost is typically no more than a few cents per day, even with relatively heavy use.
+> While many models such as the `gemini-flash-lite` family offer generous free tiers, advanced models like `gemini-3.1-pro` are typically available only through the paid tier of the Gemini API. The paid API operates on a pay-per-use basis: if you don't use it, you don't pay. Please check your billing status if you plan to use Pro models or expect intensive usage of Flash models. Under normal usage, the cost is typically no more than a few cents per day, even with relatively heavy use.
 
 **Model Recommendations for High-Quality Translate or Corrections in the Same Language:**
-*   The **Free Tier** works reliably only for Flash models and is recommended only when both the source and destination languages are major ones.  
+*   The **Free Tier** works reliably for Gemma-4 and Flash-lite models and is recommended only when both the source and destination languages are major ones.  
 *   For reliable, high-quality subtitles or long sessions, use a **Paid Tier**—at least a Flash-Lite model or the Gemini-3-Flash model, which provides good results for major language translations and improves same-language transcription.
 *   Use `gemini-3.1-pro` when either the source or destination language is not a major language, although you might experience more translation failures due to its longer processing times.
 
