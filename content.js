@@ -134,14 +134,14 @@ if (window.__audioTranscriptionOverlayApi) {
         safeCommitKeep: 2, safeCommitMinSeg: 4, safeCommitElapsed: 3500,
         fallbackElapsed: 4000, silenceFlushMs: 1200, silenceCheckMs: 800,
         translationMinWords: 16, translationSentenceWords: 10, translationSilenceMs: 1500,
-        alignmentSamples: 6, similarityThreshold: 0.85
+        alignmentSamples: 6, similarityThreshold: 0.87
       },
       lowlag: {
-        stableWordCount: 5, stableElapsed: 1200, stableSegments: 3,
-        safeCommitKeep: 1, safeCommitMinSeg: 2, safeCommitElapsed: 1500,
-        fallbackElapsed: 2000, silenceFlushMs: 600, silenceCheckMs: 400,
-        translationMinWords: 8, translationSentenceWords: 5, translationSilenceMs: 800,
-        alignmentSamples: 4, similarityThreshold: 0.80
+        stableWordCount: 6, stableElapsed: 1500, stableSegments: 3,
+        safeCommitKeep: 1, safeCommitMinSeg: 2, safeCommitElapsed: 1800,
+        fallbackElapsed: 2500, silenceFlushMs: 1000, silenceCheckMs: 500, 
+        translationMinWords: 10, translationSentenceWords: 6, translationSilenceMs: 1000,
+        alignmentSamples: 5, similarityThreshold: 0.88
       }
     };
     
@@ -647,7 +647,6 @@ if (window.__audioTranscriptionOverlayApi) {
       const wordCount = countWords(queued);
       const hasSentenceBoundary = SENTENCE_END_RE.test(queued);
 
-      // Force flush if too long
       if (!isTranslatingLocal && (wordCount >= activeProfile.translationMinWords || (wordCount >= activeProfile.translationSentenceWords && hasSentenceBoundary) || wordCount > 60)) {
         processTranslationQueue();
       }
@@ -678,11 +677,23 @@ if (window.__audioTranscriptionOverlayApi) {
         shownTail = recentTranslated.split(/\s+/).filter(Boolean).slice(-8).join(" ");
       }
 
-      chrome.runtime.sendMessage({ action: "processTranslation", text, shownTail }, (response) => {
+      chrome.runtime.sendMessage({ action: "processTranslation", text, shownTail, skipTts: true }, (response) => {
         const runtimeErr = chrome.runtime.lastError?.message || "";
         isTranslatingLocal = false;
+        
         if (!runtimeErr && response?.success) {
-          if (response.data) addTranslatedChunk(response.data);
+          if (response.data) {
+            const acceptedText = addTranslatedChunk(response.data);
+            if (acceptedText && enableTts) {
+               chrome.storage.local.get(["targetLanguage", "ttsSpeed"], (cfg) => {
+                   chrome.runtime.sendMessage({ 
+                       action: 'speakTranslatedText', 
+                       text: acceptedText, 
+                       lang: cfg.targetLanguage
+                   });
+               });
+            }
+          }
           if (response.geminiError) updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
           else updateHeaderStatusText("Translation Active");
         } else {
@@ -696,7 +707,7 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function addTranslatedChunk(text) {
       const clean = normalizeText(removeInternalRepetitions(normalizeText(text), 4));
-      if (!clean) { renderText(); return; }
+      if (!clean) { renderText(); return null; }
       const recentHistory = translatedChunks.slice(-15).join(" ");
       let deduped = clean;
       
@@ -704,20 +715,22 @@ if (window.__audioTranscriptionOverlayApi) {
         deduped = trimPrefixOverlap(recentHistory, clean, 60, 2);
       }
       
-      if (!deduped) { renderText(); return; }
+      if (!deduped) { renderText(); return null; }
 
       const isDuplicate = translatedChunks.slice(-10).some(chunk => calculateTextSimilarity(chunk, deduped) > 0.85);
-      if (isDuplicate) { renderText(); return; }
+      if (isDuplicate) { renderText(); return null; }
 
       const recentFull = stripPunctuation(translatedChunks.slice(-20).join(" "));
       const dedupStripped = stripPunctuation(deduped);
       if (dedupStripped.length > 15 && recentFull.includes(dedupStripped)) { 
-        renderText(); return; 
+        renderText(); return null; 
       }
 
       translatedChunks.push(deduped);
       if (translatedChunks.length > 5000) translatedChunks.shift();
       renderText();
+      
+      return deduped;
     }
 
     function appendCommittedChunk(text) {
@@ -750,9 +763,12 @@ if (window.__audioTranscriptionOverlayApi) {
             if (calculateTextSimilarity(lastChunks, deduped) >= activeProfile.similarityThreshold) return false;
         }
 
-        if (countWords(deduped) <= 3) {
-            const dedupedStripped = stripPunctuation(deduped);
-            const recentHistoryStripped = stripPunctuation(allHistory.slice(-10).join(' '));
+        const dedupedStripped = stripPunctuation(deduped);
+        const recentHistoryStripped = stripPunctuation(allHistory.slice(-15).join(' '));
+        
+        if (countWords(deduped) <= 8) {
+            if (dedupedStripped && recentHistoryStripped.includes(dedupedStripped)) return false;
+        } else if (countWords(deduped) <= 3) {
             if (dedupedStripped && recentHistoryStripped.includes(dedupedStripped)) return false;
         }
 
@@ -926,8 +942,8 @@ if (window.__audioTranscriptionOverlayApi) {
         mainWrapperEl.style.overflow      = "hidden";
       }
       
-      transcriptionOriginalEl.style.overflowY = "scroll";
-      transcriptionTranslatedEl.style.overflowY = "scroll";
+      transcriptionOriginalEl.style.overflowY = "auto";
+      transcriptionTranslatedEl.style.overflowY = "auto";
 
       const hasTransHistory = isSubtitleMode ? subtitleTranslatedHistory.length > 0 : translatedChunks.length > 0;
       const isTransActive = enableGeminiTranslation || hasTransHistory;
@@ -1478,6 +1494,21 @@ if (window.__audioTranscriptionOverlayApi) {
           sendResponse({ success: true }); 
           return true;
         }
+
+        if (request.type === "clearWhisperBuffers") {
+          segments = [];
+          previousSegments = [];
+          pendingStableText = "";
+          lastReceivedTime = Date.now();
+          windowStartTime = Date.now();
+          translationQueue = [];
+          isTranslatingLocal = false;
+          try { chrome.runtime.sendMessage({ action: "stopTts", isSeek: true }); } catch(e){}
+          if (!isStandaloneHidden) renderText();
+          sendResponse({ success: true });
+          return true;
+        }
+
         if (request.type === "STOP") { 
           stopAndCloseOverlay(); 
           sendResponse({ success: true }); 
@@ -1548,14 +1579,40 @@ if (window.__audioTranscriptionOverlayApi) {
       });
     }
 
+    function attachWhisperSeekListener() {
+      setInterval(() => {
+        const video = document.querySelector('video');
+        if (video && !video.dataset.wlSeekAttached) {
+          video.dataset.wlSeekAttached = 'true';
+          
+          let lastTime = video.currentTime || 0;
+
+          video.addEventListener('timeupdate', () => {
+             if (!video.seeking) lastTime = video.currentTime;
+          });
+
+          video.addEventListener('seeked', () => {
+            if (isSubtitleMode) return; 
+
+            if (Math.abs(video.currentTime - lastTime) > 2.5) {
+                console.log("[WhisperLive] Salto de tiempo del usuario detectado. Resincronizando buffers.");
+                chrome.runtime.sendMessage({ action: "whisperSeeked" });
+            }
+          });
+        }
+      }, 2000);
+    }
+
     function reactivate() { 
       bindMessageListenerOnce(); 
       bindStorageListener(); 
+      attachWhisperSeekListener();
     }
     
     function init() { 
       bindMessageListenerOnce(); 
       bindStorageListener(); 
+      attachWhisperSeekListener();
       if(!isStandaloneHidden) { 
         ensureOverlay(); 
         startSilenceMonitor(); 

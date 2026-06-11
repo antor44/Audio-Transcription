@@ -561,6 +561,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (e) { sendResponse({ language: "" }); }
       return true;
     }
+
+    if (message.action === "whisperSeeked") {
+      getStorage(["currentTabId", "standaloneTabId"]).then(res => {
+        if (res.currentTabId) sendMessageToTab(res.currentTabId, { type: "clearWhisperBuffers" });
+        if (res.standaloneTabId) sendMessageToTab(res.standaloneTabId, { type: "clearWhisperBuffers" });
+      });
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === "speakTranslatedText") {
+      getStorage(["enableTts"]).then((res) => {
+        if (!res.enableTts) { sendResponse({ success: true }); return; }
+        speakText(message.text, message.lang);
+        sendResponse({ success: true });
+      });
+      return true;
+    }
+
     if (message.action === "startCapture") { startCapture(message); sendResponse({ success: true }); return false; }
     if (message.type === "STOP") { stopCapture(); stopSubtitleTtsInternal().catch(()=>{}); sendResponse({ success: true }); return false; }
     if (message.action === "stopCapture") { stopCapture(); sendResponse({ success: true }); return false; }
@@ -596,6 +615,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
     }
+
     if (message.action === "subtitleSpeak") {
       const text = normalizeText(message.text); const lang = message.lang || "";
       const rate = Number.parseFloat(message.ttsSpeed) || 1.0; const fromTabId = sender.tab?.id || subtitleTabId;
@@ -636,6 +656,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       sendResponse({ success: true }); return true;
     }
+    
     if (message.action === "startSubtitleTts") {
       const tabId = message.tabId;
       if (!tabId) { sendResponse({ success: false, error: "No tab ID provided" }); return false; }
