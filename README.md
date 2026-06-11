@@ -1,4 +1,4 @@
-# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.1.3)
+# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.1.4)
 
 A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-time interpreter. It captures any audio playing in a tab (transcribing it via a local Whisper AI server) or reads existing video subtitles, translates them live, and reads the results back to you via Text-to-Speech (TTS) on the fly. 
 
