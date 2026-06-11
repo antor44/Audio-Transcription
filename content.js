@@ -121,89 +121,61 @@ if (window.__audioTranscriptionOverlayApi) {
       originalVideoVolumes.clear();
     }
 
-    // Transcription Profile Configs
     const PROFILES = {
       accurate: {
-        stableWordCount: 15,
-        stableElapsed: 4000,
-        stableSegments: 7,
-        safeCommitKeep: 3,
-        safeCommitMinSeg: 5,
-        safeCommitElapsed: 5000,
-        fallbackElapsed: 6000,
-        silenceFlushMs: 2000,
-        silenceCheckMs: 1000,
-        translationMinWords: 20,
-        translationSentenceWords: 14,
-        translationSilenceMs: 2500,
-        alignmentSamples: 4
+        stableWordCount: 15, stableElapsed: 4000, stableSegments: 7,
+        safeCommitKeep: 3, safeCommitMinSeg: 5, safeCommitElapsed: 5000,
+        fallbackElapsed: 6000, silenceFlushMs: 2000, silenceCheckMs: 1000,
+        translationMinWords: 20, translationSentenceWords: 14, translationSilenceMs: 2500,
+        alignmentSamples: 8, similarityThreshold: 0.90
       },
       balanced: {
-        stableWordCount: 10,
-        stableElapsed: 2500,
-        stableSegments: 5,
-        safeCommitKeep: 2,
-        safeCommitMinSeg: 4,
-        safeCommitElapsed: 3500,
-        fallbackElapsed: 4000,
-        silenceFlushMs: 1200,
-        silenceCheckMs: 800,
-        translationMinWords: 16,
-        translationSentenceWords: 10,
-        translationSilenceMs: 1500,
-        alignmentSamples: 6
+        stableWordCount: 10, stableElapsed: 2500, stableSegments: 5,
+        safeCommitKeep: 2, safeCommitMinSeg: 4, safeCommitElapsed: 3500,
+        fallbackElapsed: 4000, silenceFlushMs: 1200, silenceCheckMs: 800,
+        translationMinWords: 16, translationSentenceWords: 10, translationSilenceMs: 1500,
+        alignmentSamples: 6, similarityThreshold: 0.85
       },
       lowlag: {
-        stableWordCount: 5,
-        stableElapsed: 1200,
-        stableSegments: 3,
-        safeCommitKeep: 1,
-        safeCommitMinSeg: 2,
-        safeCommitElapsed: 1500,
-        fallbackElapsed: 2000,
-        silenceFlushMs: 600,
-        silenceCheckMs: 400,
-        translationMinWords: 8,
-        translationSentenceWords: 5,
-        translationSilenceMs: 800,
-        alignmentSamples: 8
+        stableWordCount: 5, stableElapsed: 1200, stableSegments: 3,
+        safeCommitKeep: 1, safeCommitMinSeg: 2, safeCommitElapsed: 1500,
+        fallbackElapsed: 2000, silenceFlushMs: 600, silenceCheckMs: 400,
+        translationMinWords: 8, translationSentenceWords: 5, translationSilenceMs: 800,
+        alignmentSamples: 4, similarityThreshold: 0.80
       }
     };
+    
     let activeProfile = PROFILES.balanced;
 
-    function getProfile(name) {
-      return PROFILES[name] || PROFILES.balanced;
-    }
-
+    function getProfile(name) { return PROFILES[name] || PROFILES.balanced; }
     function normalizeText(text) { return String(text || "").replace(/[ \t\r]+/g, " ").trim(); }
-    function stripPunctuation(text) {
-      return String(text || "").toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, " ").replace(/\s+/g, " ").trim();
-    }
+    function stripPunctuation(text) { return String(text || "").toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, " ").replace(/\s+/g, " ").trim(); }
     function splitWords(text) { return stripPunctuation(text).split(" ").filter(Boolean); }
-    function escapeHtml(value) {
-      return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-    }
+    function escapeHtml(value) { return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
     function setSetting(key, value) { chrome.storage.local.set({ [key]: value }); }
-    function debounce(fn, delay) {
-      let timer = null;
-      return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+    
+    function debounce(fn, delay) { 
+      let timer = null; 
+      return (...args) => { 
+        clearTimeout(timer); 
+        timer = setTimeout(() => fn(...args), delay); 
+      }; 
     }
+    
     const debouncedSaveWindowStyle = debounce(saveWindowStyle, 200);
-
-    const SPACELESS_RE = /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0E7F\u1000-\u109F\u1780-\u17FF]/;
-
-    function isSpacelessScript(text) {
-      return SPACELESS_RE.test(text);
+    const SPACELESS_RE = /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u1780-\u17FF]/;
+    
+    function isSpacelessScript(text) { 
+      return SPACELESS_RE.test(text); 
     }
 
-    const SENTENCE_END_CHARS =
-      ".!?\u2026\u3002\uFF01\uFF1F\u3001\u061F\u060C\u061B\u0964\u0965\u104A\u104B\u17D4\u1362\u0589";
+    const SENTENCE_END_CHARS = ".!?\u2026\u3002\uFF01\uFF1F\u3001\u061F\u060C\u061B\u0964\u0965\u104A\u104B\u17D4\u1362\u0589";
     const SENTENCE_END_RE = new RegExp("[" + SENTENCE_END_CHARS + "]");
 
     function countWords(text) {
       const t = normalizeText(text);
       if (!t) return 0;
-      const spaceWords     = t.split(/\s+/).filter(Boolean).length;
+      const spaceWords = t.split(/\s+/).filter(Boolean).length;
       const spacelessChars = (t.match(SPACELESS_RE) || []).length;
       return spacelessChars > spaceWords ? spacelessChars : spaceWords;
     }
@@ -214,23 +186,55 @@ if (window.__audioTranscriptionOverlayApi) {
         const cleanA = a.replace(/\s+/g, "");
         const cleanB = b.replace(/\s+/g, "");
         if (!cleanA.length || !cleanB.length) return 0;
-        
         const setA = new Set(cleanA);
         const setB = new Set(cleanB);
         let intersection = 0;
-        for (const char of setB) {
-          if (setA.has(char)) intersection++;
+        for (const char of setB) { 
+          if (setA.has(char)) intersection++; 
         }
         return intersection / Math.max(setA.size, setB.size);
       }
-
       const wa = splitWords(a);
       const wb = splitWords(b);
       if (!wa.length || !wb.length) return 0;
       const setA = new Set(wa);
       let matches = 0;
-      for (const word of wb) { if (setA.has(word)) matches++; }
+      for (const word of wb) { 
+        if (setA.has(word)) matches++; 
+      }
       return matches / Math.max(wa.length, wb.length);
+    }
+
+    function calculateBigramContainment(baseText, newText) {
+      const baseWords = splitWords(baseText);
+      const newWords = splitWords(newText);
+      if (baseWords.length < 2 || newWords.length < 2) return 0;
+      
+      const baseBigrams = new Set();
+      for (let i = 0; i < baseWords.length - 1; i++) {
+        baseBigrams.add(baseWords[i] + " " + baseWords[i + 1]);
+      }
+      
+      let matches = 0;
+      const newBigramsCount = newWords.length - 1;
+      for (let i = 0; i < newWords.length - 1; i++) {
+        const bigram = newWords[i] + " " + newWords[i + 1];
+        if (baseBigrams.has(bigram)) matches++;
+      }
+      
+      return matches / newBigramsCount;
+    }
+
+    function isFuzzyMatch(textA, textB) {
+      const a = stripPunctuation(textA);
+      const b = stripPunctuation(textB);
+      if (a === b) return true;
+      const wa = a.split(" ").filter(Boolean);
+      const wb = b.split(" ").filter(Boolean);
+      if (wa.length >= 4 && wb.length >= 4) {
+         if (calculateTextSimilarity(a, b) >= 0.75) return true;
+      }
+      return false;
     }
 
     function trimPrefixOverlap(baseText, candidateText, maxWords = 80, minWords = 3) {
@@ -239,33 +243,28 @@ if (window.__audioTranscriptionOverlayApi) {
         const cleanBase = baseText.replace(/\s+/g, "");
         const cleanCand = candidateText.replace(/\s+/g, "");
         const maxChars = Math.min(100, cleanBase.length, cleanCand.length);
-        const minChars = 2;
-        for (let size = maxChars; size >= minChars; size--) {
+        for (let size = maxChars; size >= 2; size--) {
           const suffix = cleanBase.slice(-size);
           const prefix = cleanCand.slice(0, size);
           if (suffix === prefix) {
-            let charsMatched = 0;
+            let charsMatched = 0; 
             let candIdx = 0;
             while (candIdx < candidateText.length && charsMatched < size) {
-              if (!/\s/.test(candidateText[candIdx])) {
-                charsMatched++;
-              }
+              if (!/\s/.test(candidateText[candIdx])) charsMatched++;
               candIdx++;
             }
             return normalizeText(candidateText.slice(candIdx));
           }
         }
-        for (let size = maxChars; size >= Math.max(4, minChars); size--) {
+        for (let size = maxChars; size >= 4; size--) {
           const suffix = cleanBase.slice(-size);
           const idx = cleanCand.indexOf(suffix);
           if (idx !== -1) {
-            let charsMatched = 0;
+            let charsMatched = 0; 
             let candIdx = 0;
             const targetCharCount = idx + size;
             while (candIdx < candidateText.length && charsMatched < targetCharCount) {
-              if (!/\s/.test(candidateText[candIdx])) {
-                charsMatched++;
-              }
+              if (!/\s/.test(candidateText[candIdx])) charsMatched++;
               candIdx++;
             }
             return normalizeText(candidateText.slice(candIdx));
@@ -280,35 +279,36 @@ if (window.__audioTranscriptionOverlayApi) {
       const max = Math.min(maxWords, baseWords.length, candidateWords.length);
 
       for (let size = max; size >= minWords; size--) {
-        let ok = true;
+        let errors = 0;
+        const maxErrors = size >= 8 ? 2 : size >= 4 ? 1 : 0;
         for (let i = 0; i < size; i++) {
-          if (baseWords[baseWords.length - size + i] !== candidateWords[i]) { ok = false; break; }
+          if (baseWords[baseWords.length - size + i] !== candidateWords[i]) { 
+            errors++; 
+            if (errors > maxErrors) break; 
+          }
         }
-        if (ok) return rawCandidateWords.slice(size).join(" ").trim();
+        if (errors <= maxErrors) return rawCandidateWords.slice(size).join(" ").trim();
       }
 
       const minAnywhere = Math.max(4, minWords);
       for (let size = max; size >= minAnywhere; size--) {
         const suffix = baseWords.slice(baseWords.length - size);
         let matchIdx = -1;
+        const maxErrors = size >= 8 ? 2 : size >= 4 ? 1 : 0;
         for (let j = 0; j <= candidateWords.length - size; j++) {
-          let match = true;
+          let errors = 0;
           for (let k = 0; k < size; k++) {
             if (suffix[k] !== candidateWords[j + k]) {
-              match = false;
-              break;
+              errors++;
+              if (errors > maxErrors) break;
             }
           }
-          if (match) {
-            matchIdx = j;
-            break;
-          }
+          if (errors <= maxErrors) { matchIdx = j; break; }
         }
         if (matchIdx !== -1) {
           return rawCandidateWords.slice(matchIdx + size).join(" ").trim();
         }
       }
-
       return normalizeText(candidateText);
     }
 
@@ -318,33 +318,28 @@ if (window.__audioTranscriptionOverlayApi) {
         const cleanBase = baseText.replace(/\s+/g, "");
         const cleanCand = rawCandidateText.replace(/\s+/g, "");
         const maxChars = Math.min(100, cleanBase.length, cleanCand.length);
-        const minChars = 2;
-        for (let size = maxChars; size >= minChars; size--) {
+        for (let size = maxChars; size >= 2; size--) {
           const suffix = cleanBase.slice(-size);
           const prefix = cleanCand.slice(0, size);
           if (suffix === prefix) {
-            let charsMatched = 0;
+            let charsMatched = 0; 
             let candIdx = 0;
             while (candIdx < rawCandidateText.length && charsMatched < size) {
-              if (!/\s/.test(rawCandidateText[candIdx])) {
-                charsMatched++;
-              }
+              if (!/\s/.test(rawCandidateText[candIdx])) charsMatched++;
               candIdx++;
             }
             return rawCandidateText.slice(candIdx).replace(/^[ \t\r\n]+/, "");
           }
         }
-        for (let size = maxChars; size >= Math.max(4, minChars); size--) {
+        for (let size = maxChars; size >= 4; size--) {
           const suffix = cleanBase.slice(-size);
           const idx = cleanCand.indexOf(suffix);
           if (idx !== -1) {
-            let charsMatched = 0;
+            let charsMatched = 0; 
             let candIdx = 0;
             const targetCharCount = idx + size;
             while (candIdx < rawCandidateText.length && charsMatched < targetCharCount) {
-              if (!/\s/.test(rawCandidateText[candIdx])) {
-                charsMatched++;
-              }
+              if (!/\s/.test(rawCandidateText[candIdx])) charsMatched++;
               candIdx++;
             }
             return rawCandidateText.slice(candIdx).replace(/^[ \t\r\n]+/, "");
@@ -356,15 +351,20 @@ if (window.__audioTranscriptionOverlayApi) {
       const baseWords = splitWords(baseText);
       const candidateWords = splitWords(rawCandidateText);
       const max = Math.min(maxWords, baseWords.length, candidateWords.length);
+      
       for (let size = max; size >= minWords; size--) {
-        let ok = true;
+        let errors = 0;
+        const maxErrors = size >= 8 ? 2 : size >= 4 ? 1 : 0;
         for (let i = 0; i < size; i++) {
-          if (baseWords[baseWords.length - size + i] !== candidateWords[i]) { ok = false; break; }
+          if (baseWords[baseWords.length - size + i] !== candidateWords[i]) { 
+            errors++; 
+            if (errors > maxErrors) break; 
+          }
         }
-        if (ok) {
-          let matchCount = 0;
+        if (errors <= maxErrors) {
+          let matchCount = 0; 
           let removeUpTo = 0;
-          const wordRegex = /\S+/g;
+          const wordRegex = /\S+/g; 
           let m;
           while ((m = wordRegex.exec(rawCandidateText)) !== null) {
             matchCount++;
@@ -378,24 +378,22 @@ if (window.__audioTranscriptionOverlayApi) {
       for (let size = max; size >= minAnywhere; size--) {
         const suffix = baseWords.slice(baseWords.length - size);
         let matchIdx = -1;
+        const maxErrors = size >= 8 ? 2 : size >= 4 ? 1 : 0;
         for (let j = 0; j <= candidateWords.length - size; j++) {
-          let match = true;
+          let errors = 0;
           for (let k = 0; k < size; k++) {
             if (suffix[k] !== candidateWords[j + k]) {
-              match = false;
-              break;
+              errors++;
+              if (errors > maxErrors) break;
             }
           }
-          if (match) {
-            matchIdx = j;
-            break;
-          }
+          if (errors <= maxErrors) { matchIdx = j; break; }
         }
         if (matchIdx !== -1) {
-          let matchCount = 0;
+          let matchCount = 0; 
           let removeUpTo = 0;
           const targetWords = matchIdx + size;
-          const wordRegex = /\S+/g;
+          const wordRegex = /\S+/g; 
           let m;
           while ((m = wordRegex.exec(rawCandidateText)) !== null) {
             matchCount++;
@@ -404,7 +402,6 @@ if (window.__audioTranscriptionOverlayApi) {
           return rawCandidateText.slice(removeUpTo).replace(/^[ \t\r\n]+/, "");
         }
       }
-
       return rawCandidateText;
     }
 
@@ -414,7 +411,6 @@ if (window.__audioTranscriptionOverlayApi) {
         const clean = text.replace(/\s+/g, "");
         const minMatchChars = Math.max(2, Math.floor(minMatchWords / 2));
         if (clean.length < minMatchChars * 2) return text;
-        
         for (let i = minMatchChars; i < clean.length; i++) {
           const maxLen = Math.min(25, clean.length - i);
           for (let len = maxLen; len >= minMatchChars; len--) {
@@ -423,15 +419,12 @@ if (window.__audioTranscriptionOverlayApi) {
               for (let k = 0; k < len; k++) {
                 if (clean[j + k] !== clean[i + k]) { match = false; break; }
               }
-              if (match) {
-                return clean.slice(0, i) + clean.slice(i + len);
-              }
+              if (match) return clean.slice(0, i) + clean.slice(i + len);
             }
           }
         }
         return text;
       }
-
       const words = normalizeText(text).split(/\s+/).filter(Boolean);
       if (words.length < minMatchWords * 2) return text;
       const low = words.map(w => stripPunctuation(w));
@@ -443,11 +436,7 @@ if (window.__audioTranscriptionOverlayApi) {
             for (let k = 0; k < len; k++) {
               if (low[j + k] !== low[i + k]) { match = false; break; }
             }
-            if (match) {
-              return normalizeText(
-                words.slice(0, i).join(" ") + " " + words.slice(i + len).join(" ")
-              );
-            }
+            if (match) return normalizeText(words.slice(0, i).join(" ") + " " + words.slice(i + len).join(" "));
           }
         }
       }
@@ -465,98 +454,66 @@ if (window.__audioTranscriptionOverlayApi) {
       }
 
       let flat = clean.replace(/\n{2,}/g, "\u0000").replace(/\n/g, " ").replace(/\u0000/g, "\n\n");
+      flat = flat.replace(/\s+([.!?,;:])/g, "$1").replace(/\.{2,}/g, ".");
+      flat = flat.replace(/([.!?]\s+)([a-záéíóúàèìòùäëïöüâêîôûa-z])/gu, (_, punct, letter) => punct + letter.toUpperCase());
+      flat = flat.replace(/^([a-záéíóúàèìòùäëïöüâêîôûa-z])/u, (_, letter) => letter.toUpperCase());
 
-      // Fix space before punctuation: "hello ." → "hello."
-      flat = flat.replace(/\s+([.!?,;:])/g, "$1");
+      if (formatting === "join") return flat;
 
-      // Fix duplicate or chained dots: "hello.. world" → "hello. world"
-      flat = flat.replace(/\.{2,}/g, ".");
-
-      // Capitalize first letter after sentence-ending punctuation
-      flat = flat.replace(
-        /([.!?]\s+)([a-záéíóúàèìòùäëïöüâêîôûa-z])/gu,
-        (_, punct, letter) => punct + letter.toUpperCase()
-      );
-
-      // Capitalize the very first character
-      flat = flat.replace(/^([a-záéíóúàèìòùäëïöüâêîôûa-z])/u,
-        (_, letter) => letter.toUpperCase()
-      );
-
-      if (formatting === "join") {
-        return flat;
-      }
-
-      // Advanced: Group sentences into paragraphs dynamically based on original pauses and deterministic limits (3 to 5 periods)
       const getDeterministicLimit = (strText) => {
-        let hash = 0;
+        let hash = 0; 
         const s = String(strText || "");
         for (let idx = 0; idx < s.length; idx++) {
-          hash = (hash << 5) - hash + s.charCodeAt(idx);
+          hash = (hash << 5) - hash + s.charCodeAt(idx); 
           hash |= 0;
         }
-        return 3 + (Math.abs(hash) % 3); // Return stable, fixed 3, 4, or 5
+        return 3 + (Math.abs(hash) % 3);
       };
 
       const rawParagraphs = flat.split(/\n+/).map(p => p.trim()).filter(Boolean);
       const processedParagraphs = [];
-      
       let currentParagraphWords = [];
       let currentParagraphPeriods = 0;
-      let randomPeriodLimit = 4; // Stable initial seed limit
+      let randomPeriodLimit = 4;
       
       for (let pIdx = 0; pIdx < rawParagraphs.length; pIdx++) {
         const paragraphText = rawParagraphs[pIdx];
         const sentenceBoundaryRegex = /(?<!\b\p{L})(?<!\b(?:EE|UU|Sr|Sra|Dr|Dra|Mr|Mrs|Ms|Prof|St|Mt|etc|vs|cf|ie|eg|al|Ud|Vd|vd|ud|av|Av))([.!?\u2026\u061F\u3002\uFF01\uFF1F]+["')\]»"]*)\s+/gu;
-        
-        let sentences = [];
-        let lastIdx = 0;
+        let sentences = []; 
+        let lastIdx = 0; 
         let match;
+        
         while ((match = sentenceBoundaryRegex.exec(paragraphText)) !== null) {
           sentences.push(paragraphText.substring(lastIdx, sentenceBoundaryRegex.lastIndex).trim());
           lastIdx = sentenceBoundaryRegex.lastIndex;
         }
         const remainder = paragraphText.substring(lastIdx).trim();
-        if (remainder) {
-          sentences.push(remainder);
-        }
+        if (remainder) sentences.push(remainder);
         
         for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
           const sentence = sentences[sIdx];
           currentParagraphWords.push(sentence);
-          
           if (/[.!?\u2026\u3002\uFF01\uFF1F\u061F]/.test(sentence)) {
             currentParagraphPeriods++;
-            // Calculate a deterministic limit based on the unique character composition of this sentence
             randomPeriodLimit = getDeterministicLimit(sentence);
           }
-          
           const currentWordCount = currentParagraphWords.join(" ").split(/\s+/).length;
-          
-          // Break paragraph if we hit the dynamic deterministic limit or paragraph gets too long
           if (currentParagraphPeriods >= randomPeriodLimit || currentWordCount > 80) {
             processedParagraphs.push(currentParagraphWords.join(" "));
-            currentParagraphWords = [];
-            currentParagraphPeriods = 0;
+            currentParagraphWords = []; 
+            currentParagraphPeriods = 0; 
             randomPeriodLimit = 4;
           }
         }
-        
-        // Natural pause boundary: Commit break only if current paragraph has enough content (>25 words)
-        // to prevent isolated single-sentence lines.
         const currentAccumulatedWordCount = currentParagraphWords.join(" ").split(/\s+/).filter(Boolean).length;
         if (currentAccumulatedWordCount >= 25 && currentParagraphWords.length > 0) {
           processedParagraphs.push(currentParagraphWords.join(" "));
-          currentParagraphWords = [];
-          currentParagraphPeriods = 0;
+          currentParagraphWords = []; 
+          currentParagraphPeriods = 0; 
           randomPeriodLimit = 4;
         }
       }
-      
-      if (currentParagraphWords.length > 0) {
-        processedParagraphs.push(currentParagraphWords.join(" "));
-      }
-      
+      if (currentParagraphWords.length > 0) processedParagraphs.push(currentParagraphWords.join(" "));
       return processedParagraphs.join("\n").replace(/[ \t]+/g, " ").replace(/\n /g, "\n").replace(/ \n/g, "\n").trim();
     }
 
@@ -565,42 +522,52 @@ if (window.__audioTranscriptionOverlayApi) {
       const chunks = [];
       if (!rest) return { chunks, remainder: "" };
 
-      const sentenceRegex = new RegExp(
-        "[^" + SENTENCE_END_CHARS + "]+" +
-        "[" + SENTENCE_END_CHARS + "]+(?:[\"')\\]]+)?",
-        "g"
-      );
-      let consumedLength = 0;
+      const sentenceRegex = new RegExp("[^" + SENTENCE_END_CHARS + "]+[" + SENTENCE_END_CHARS + "]+(?:[\"')\\]]+)?", "g");
+      let consumedLength = 0; 
       let match;
-
+      
       while ((match = sentenceRegex.exec(rest)) !== null) {
         const sentence = normalizeText(match[0]);
         if (sentence) chunks.push(sentence);
         consumedLength = sentenceRegex.lastIndex;
       }
-
       rest = normalizeText(rest.slice(consumedLength));
 
+      const PAUSE_CHARS = ",;:،؛、；：\u2026";
+      const pauseRegex = new RegExp("[^" + PAUSE_CHARS + "]+[" + PAUSE_CHARS + "]+(?:[\"')\\]]+)?", "g");
+
       if (isSpacelessScript(rest)) {
-        const CHARS_PER_CHUNK = 20;
+        const CHARS_PER_CHUNK = 50;
         while (rest.length >= CHARS_PER_CHUNK) {
-          chunks.push(rest.slice(0, CHARS_PER_CHUNK));
-          rest = rest.slice(CHARS_PER_CHUNK).replace(/^\s+/, "");
+          pauseRegex.lastIndex = 0;
+          let pauseMatch = pauseRegex.exec(rest);
+          if (pauseMatch && pauseMatch[0].length >= 10 && pauseMatch[0].length <= 80) {
+             chunks.push(normalizeText(pauseMatch[0]));
+             rest = normalizeText(rest.slice(pauseRegex.lastIndex));
+          } else {
+             chunks.push(rest.slice(0, CHARS_PER_CHUNK));
+             rest = rest.slice(CHARS_PER_CHUNK).replace(/^\s+/, "");
+          }
         }
       } else {
-        const words = rest.split(/\s+/).filter(Boolean);
-        while (words.length >= 10) {
-          const piece = normalizeText(words.splice(0, 10).join(" "));
-          if (piece) chunks.push(piece);
+        const MAX_FALLBACK_WORDS = 15;
+        let words = rest.split(/\s+/).filter(Boolean);
+        while (words.length >= MAX_FALLBACK_WORDS) {
+          pauseRegex.lastIndex = 0;
+          let pauseMatch = pauseRegex.exec(rest);
+          let matchWordCount = pauseMatch ? pauseMatch[0].split(/\s+/).filter(Boolean).length : 0;
+          if (matchWordCount >= 6 && matchWordCount <= 25) {
+             chunks.push(normalizeText(pauseMatch[0]));
+             rest = normalizeText(rest.slice(pauseRegex.lastIndex));
+             words = rest.split(/\s+/).filter(Boolean);
+          } else {
+             const piece = normalizeText(words.splice(0, MAX_FALLBACK_WORDS).join(" "));
+             if (piece) chunks.push(piece);
+             rest = normalizeText(words.join(" "));
+          }
         }
-        rest = normalizeText(words.join(" "));
       }
-
-      if (forceFlush && rest.length) {
-        chunks.push(rest);
-        return { chunks, remainder: "" };
-      }
-
+      if (forceFlush && rest.length) { chunks.push(rest); return { chunks, remainder: "" }; }
       return { chunks, remainder: rest };
     }
 
@@ -612,9 +579,9 @@ if (window.__audioTranscriptionOverlayApi) {
     function saveWindowStyle() {
       if (!containerElement) return;
       setSetting("windowStyle", {
-        top: containerElement.style.top,
+        top: containerElement.style.top, 
         left: containerElement.style.left,
-        width: containerElement.style.width,
+        width: containerElement.style.width, 
         height: containerElement.style.height
       });
     }
@@ -634,32 +601,31 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function resetRuntimeState(isSubMode = false) {
-      segments = [];
-      previousSegments = [];
+      segments = []; 
+      previousSegments = []; 
       dedupTail = historyChunks.slice(-40);
-      historyChunks = [];
-      historyChunksRaw = [];
+      historyChunks = []; 
+      historyChunksRaw = []; 
       translatedChunks = [];
-      pendingStableText = "";
+      pendingStableText = ""; 
       windowStartTime = Date.now();
-      currentFormatting = currentFormatting || "advanced";
+      currentFormatting = currentFormatting || "advanced"; 
       currentDisplayMode = currentDisplayMode || "both";
-      currentFontSize = currentFontSize || 20;
+      currentFontSize = currentFontSize || 20; 
       lastReceivedTime = Date.now();
-      translationQueue = [];
+      translationQueue = []; 
       isTranslatingLocal = false;
       if (statusClearTimer) { clearTimeout(statusClearTimer); statusClearTimer = null; }
       window.__transcriptionStatusText = "";
       resetTranslationContext();
-      subtitleOriginalHistory = [];
+      subtitleOriginalHistory = []; 
       subtitleTranslatedHistory = [];
-      isSubtitleMode = !!isSubMode;
+      isSubtitleMode = !!isSubMode; 
       currentTrackLang = "";
     }
 
     function queueTranslation(text) {
       if (!enableGeminiTranslation) return;
-
       const cleanText = removeInternalRepetitions(normalizeText(text));
       if (!cleanText) return;
 
@@ -670,7 +636,6 @@ if (window.__audioTranscriptionOverlayApi) {
         const newPart        = trimPrefixOverlap(lastInQueue, cleanText, 60, 3);
         const newPartWords   = countWords(newPart);
         const cleanTextWords = countWords(cleanText);
-
         if (newPartWords < 2 && newPartWords < cleanTextWords) {
           translationQueue[translationQueue.length - 1] = cleanText;
         } else {
@@ -682,28 +647,26 @@ if (window.__audioTranscriptionOverlayApi) {
       const wordCount = countWords(queued);
       const hasSentenceBoundary = SENTENCE_END_RE.test(queued);
 
-      if (
-        !isTranslatingLocal &&
-        (wordCount >= activeProfile.translationMinWords ||
-          (wordCount >= activeProfile.translationSentenceWords && hasSentenceBoundary))
-      ) {
+      // Force flush if too long
+      if (!isTranslatingLocal && (wordCount >= activeProfile.translationMinWords || (wordCount >= activeProfile.translationSentenceWords && hasSentenceBoundary) || wordCount > 60)) {
         processTranslationQueue();
       }
     }
     
     function processTranslationQueue() {
       if (isTranslatingLocal || translationQueue.length === 0) return;
-
       const MAX_SOURCE_CHARS = 400;
-      let text = "";
+      let text = ""; 
       let consumed = 0;
+      
       while (consumed < translationQueue.length) {
-        const next      = translationQueue[consumed];
+        const next = translationQueue[consumed];
         const candidate = text ? text + " " + next : next;
         if (text && candidate.length > MAX_SOURCE_CHARS) break;
-        text = candidate;
+        text = candidate; 
         consumed++;
       }
+      
       translationQueue.splice(0, consumed);
       isTranslatingLocal = true;
 
@@ -718,51 +681,38 @@ if (window.__audioTranscriptionOverlayApi) {
       chrome.runtime.sendMessage({ action: "processTranslation", text, shownTail }, (response) => {
         const runtimeErr = chrome.runtime.lastError?.message || "";
         isTranslatingLocal = false;
-
         if (!runtimeErr && response?.success) {
-          if (response.data) {
-            addTranslatedChunk(response.data);
-          }
-          if (response.geminiError) {
-            updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
-          } else {
-            updateHeaderStatusText("Translation Active");
-          }
+          if (response.data) addTranslatedChunk(response.data);
+          if (response.geminiError) updateHeaderStatusText(`GT fallback — Gemini: ${response.geminiError}`);
+          else updateHeaderStatusText("Translation Active");
         } else {
           const errMsg = response?.error || runtimeErr || "Translation failed";
           updateHeaderStatusText(`Translation Error: ${errMsg}`);
-          console.error("Translation failed:", errMsg, response || null);
           translationQueue.unshift(text);
         }
-
-        if (translationQueue.length > 0) {
-          setTimeout(processTranslationQueue, 100);
-        }
+        if (translationQueue.length > 0) setTimeout(processTranslationQueue, 100);
       });
     }
 
     function addTranslatedChunk(text) {
       const clean = normalizeText(removeInternalRepetitions(normalizeText(text), 4));
       if (!clean) { renderText(); return; }
-
       const recentHistory = translatedChunks.slice(-15).join(" ");
       let deduped = clean;
-
+      
       if (recentHistory) {
         deduped = trimPrefixOverlap(recentHistory, clean, 60, 2);
       }
-
+      
       if (!deduped) { renderText(); return; }
 
-      const isDuplicate = translatedChunks.slice(-10).some(
-        chunk => calculateTextSimilarity(chunk, deduped) > 0.85
-      );
+      const isDuplicate = translatedChunks.slice(-10).some(chunk => calculateTextSimilarity(chunk, deduped) > 0.85);
       if (isDuplicate) { renderText(); return; }
 
       const recentFull = stripPunctuation(translatedChunks.slice(-20).join(" "));
       const dedupStripped = stripPunctuation(deduped);
-      if (dedupStripped.length > 15 && recentFull.includes(dedupStripped)) {
-        renderText(); return;
+      if (dedupStripped.length > 15 && recentFull.includes(dedupStripped)) { 
+        renderText(); return; 
       }
 
       translatedChunks.push(deduped);
@@ -771,47 +721,65 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function appendCommittedChunk(text) {
-      const originalText = String(text || "");
-      const incoming = normalizeText(text);
-      if (!incoming) return;
+        const originalText = String(text);
+        const incoming = normalizeText(text);
+        if (!incoming) return false;
 
-      const allHistory = [...dedupTail, ...historyChunks];
-      let deduped = trimPrefixOverlap(allHistory.slice(-12).join(" "), incoming);
-      deduped = normalizeText(deduped);
-      if (!deduped) return;
+        const isDevanagari = /[\u0900-\u097F]/.test(incoming);
 
-      const lastChunks = allHistory.slice(-6).join(" ");
-      if (calculateTextSimilarity(lastChunks, deduped) > 0.80) return;
+        const allHistory = isDevanagari ? historyChunks.slice(-10) : [...dedupTail, ...historyChunks];
+        
+        let deduped = trimPrefixOverlap(allHistory.slice(-12).join(' '), incoming);
+        deduped = normalizeText(deduped);
+        if (!deduped) return false;
 
-      if (countWords(deduped) <= 5) {
-        const dedupedStripped = stripPunctuation(deduped);
-        const recentHistoryStripped = stripPunctuation(allHistory.slice(-50).join(" "));
-        if (dedupedStripped && recentHistoryStripped.includes(dedupedStripped)) return;
-      }
+        if (isDevanagari) {
+            const joinedHistory = allHistory.join(' ');
+            
+            const historyStripped = stripPunctuation(joinedHistory);
+            const dedupedStripped = stripPunctuation(deduped);
+            if (dedupedStripped.length > 15 && historyStripped.includes(dedupedStripped)) return false;
 
-      const startAnchor = stripPunctuation(normalizeText(deduped).split(/\s+/).slice(0, 7).join(" "));
-      if (startAnchor.split(" ").length >= 5) {
-        const historySearchable = stripPunctuation(allHistory.slice(-30).join(" "));
-        if (historySearchable.includes(startAnchor)) return;
-      }
+            const containment = calculateBigramContainment(joinedHistory, deduped);
+            if (containment >= 0.65) return false;
+            
+            const maxSim = allHistory.slice(-5).reduce((max, c) => Math.max(max, calculateTextSimilarity(c, deduped)), 0);
+            if (maxSim >= 0.78) return false;
+        } else {
+            const lastChunks = allHistory.slice(-20).join(' ');
+            if (calculateTextSimilarity(lastChunks, deduped) >= activeProfile.similarityThreshold) return false;
+        }
 
-      const rawDeduped = trimPrefixOverlapRaw(allHistory.slice(-12).join(" "), originalText);
+        if (countWords(deduped) <= 3) {
+            const dedupedStripped = stripPunctuation(deduped);
+            const recentHistoryStripped = stripPunctuation(allHistory.slice(-10).join(' '));
+            if (dedupedStripped && recentHistoryStripped.includes(dedupedStripped)) return false;
+        }
 
-      historyChunks.push(deduped);
-      historyChunksRaw.push(rawDeduped);
-      if (historyChunks.length > 5000) { historyChunks.shift(); historyChunksRaw.shift(); }
+        const startAnchor = stripPunctuation(normalizeText(deduped).split(' ').slice(0, 7).join(' '));
+        if (!isDevanagari && startAnchor.split(' ').length >= 5) {
+            const historySearchable = stripPunctuation(allHistory.slice(-30).join(' '));
+            if (historySearchable.includes(startAnchor)) return false;
+        }
 
-      if (enableGeminiTranslation) {
-        queueTranslation(deduped);
-      } else if (enableTts) {
-        chrome.runtime.sendMessage({ action: "speakOriginalText", text: deduped });
-      }
+        const rawDeduped = trimPrefixOverlapRaw(allHistory.slice(-12).join(' '), originalText);
+        
+        historyChunks.push(deduped); 
+        historyChunksRaw.push(rawDeduped);
+        if (historyChunks.length > 5000) { 
+            historyChunks.shift(); 
+            historyChunksRaw.shift(); 
+        }
+        
+        if (enableGeminiTranslation) queueTranslation(deduped);
+        else if (enableTts) chrome.runtime.sendMessage({ action: 'speakOriginalText', text: deduped });
+        
+        return true;
     }
 
     function absorbStableText(text, forceFlush = false) {
       pendingStableText = normalizeText(`${pendingStableText ? `${pendingStableText} ` : ""}${text || ""}`);
       if (!pendingStableText) return;
-
       const { chunks, remainder } = splitIntoFlushableChunks(pendingStableText, forceFlush);
       for (const chunk of chunks) appendCommittedChunk(chunk);
       pendingStableText = remainder;
@@ -821,27 +789,30 @@ if (window.__audioTranscriptionOverlayApi) {
       if (!Array.isArray(newSegments) || newSegments.length === 0) return;
       lastReceivedTime = Date.now();
 
+      const transferFlags = () => {
+        for (let i = 0; i < newSegments.length; i++) {
+          const rawNew = newSegments[i]?.text || "";
+          const foundIdx = previousSegments.findIndex(s => isFuzzyMatch(s?.text || "", rawNew));
+          if (foundIdx !== -1) {
+            newSegments[i]._committed = previousSegments[foundIdx]._committed;
+            newSegments[i]._dropCount = previousSegments[foundIdx]._dropCount;
+          }
+        }
+      };
+
       if (!previousSegments.length) {
         previousSegments = newSegments.slice();
         windowStartTime = Date.now();
         return;
       }
 
-      const transferFlags = () => {
-        for (let i = 0; i < newSegments.length; i++) {
-          const rawNew = stripPunctuation(newSegments[i]?.text || "");
-          const foundIdx = previousSegments.findIndex(s => stripPunctuation(s?.text || "") === rawNew);
-          if (foundIdx !== -1) {
-            newSegments[i]._committed = previousSegments[foundIdx]._committed;
-          }
-        }
-      };
-
       const P = activeProfile;
       const currentWindowText = getCurrentWindowText(newSegments);
       const wordCount = countWords(currentWindowText);
-      const elapsed   = Date.now() - windowStartTime;
-      const isStable  = wordCount >= P.stableWordCount || elapsed >= P.stableElapsed || newSegments.length >= P.stableSegments;
+      const elapsed = Date.now() - windowStartTime;
+      const isDevanagariWindow = /[\u0900-\u097F]/.test(currentWindowText);
+      const effectiveStableElapsed = isDevanagariWindow ? Math.min(P.stableElapsed, 1500) : P.stableElapsed;
+      const isStable = wordCount >= P.stableWordCount || elapsed >= effectiveStableElapsed || newSegments.length >= P.stableSegments;
 
       if (!isStable) {
         transferFlags();
@@ -853,12 +824,12 @@ if (window.__audioTranscriptionOverlayApi) {
       const samplesToTry = Math.min(P.alignmentSamples, newSegments.length);
 
       for (let i = 0; i < samplesToTry; i++) {
-        const newSegText = stripPunctuation(newSegments[i]?.text || "");
-        if (!newSegText) continue;
-        const foundIdx = previousSegments.findIndex(s => stripPunctuation(s?.text || "") === newSegText);
-        if (foundIdx !== -1) {
-          alignmentShift = foundIdx - i;
-          break;
+        const newSegText = newSegments[i]?.text || "";
+        if (!stripPunctuation(newSegText)) continue;
+        const foundIdx = previousSegments.findIndex(s => isFuzzyMatch(s?.text || "", newSegText));
+        if (foundIdx !== -1) { 
+          alignmentShift = foundIdx - i; 
+          break; 
         }
       }
 
@@ -866,8 +837,13 @@ if (window.__audioTranscriptionOverlayApi) {
         for (let i = 0; i < alignmentShift; i++) {
           const seg = previousSegments[i];
           if (seg && !seg._committed && seg.text && seg.text.trim()) {
-            appendCommittedChunk(seg.text.trim());
-            seg._committed = true;
+            const committed = appendCommittedChunk(seg.text.trim());
+            if (committed) {
+              seg._committed = true;
+            } else {
+              seg._dropCount = (seg._dropCount || 0) + 1;
+              if (seg._dropCount >= 5) seg._committed = true;
+            }
           }
         }
 
@@ -875,33 +851,49 @@ if (window.__audioTranscriptionOverlayApi) {
           const prevIdx = i + alignmentShift;
           if (prevIdx < previousSegments.length) {
             newSegments[i]._committed = previousSegments[prevIdx]._committed;
+            newSegments[i]._dropCount = previousSegments[prevIdx]._dropCount;
           } else {
-            const rawNew = stripPunctuation(newSegments[i]?.text || "");
-            const fallbackIdx = previousSegments.findIndex(s => stripPunctuation(s?.text || "") === rawNew);
-            if (fallbackIdx !== -1) newSegments[i]._committed = previousSegments[fallbackIdx]._committed;
+            const rawNew = newSegments[i]?.text || "";
+            const fallbackIdx = previousSegments.findIndex(s => isFuzzyMatch(s?.text || "", rawNew));
+            if (fallbackIdx !== -1) {
+               newSegments[i]._committed = previousSegments[fallbackIdx]._committed;
+               newSegments[i]._dropCount = previousSegments[fallbackIdx]._dropCount;
+            }
           }
         }
 
         if (newSegments.length >= P.safeCommitMinSeg || elapsed > P.safeCommitElapsed) {
-          const safeToCommit = Math.max(0, newSegments.length - P.safeCommitKeep);
+          const effectiveSafeKeep = newSegments.length <= 2 ? Math.max(0, newSegments.length - 1) : P.safeCommitKeep;
+          const safeToCommit = Math.max(0, newSegments.length - effectiveSafeKeep);
+          
           for (let i = 0; i < safeToCommit; i++) {
             const seg = newSegments[i];
             if (!seg._committed && seg.text && seg.text.trim()) {
-              appendCommittedChunk(seg.text.trim());
-              seg._committed = true;
+              const committed = appendCommittedChunk(seg.text.trim());
+              if (committed) {
+                seg._committed = true;
+              } else {
+                seg._dropCount = (seg._dropCount || 0) + 1;
+                if (seg._dropCount >= 5) seg._committed = true;
+              }
             }
           }
           windowStartTime = Date.now();
         }
-
         previousSegments = newSegments.slice();
 
       } else {
-        if (elapsed > P.fallbackElapsed) {
+        const effectiveFallbackElapsed = isDevanagariWindow ? Math.min(P.fallbackElapsed, 1800) : P.fallbackElapsed;
+        if (elapsed > effectiveFallbackElapsed) {
           previousSegments.forEach(seg => {
             if (seg && !seg._committed && seg.text && seg.text.trim()) {
-              appendCommittedChunk(seg.text.trim());
-              seg._committed = true;
+              const committed = appendCommittedChunk(seg.text.trim());
+              if (committed) {
+                seg._committed = true;
+              } else {
+                seg._dropCount = (seg._dropCount || 0) + 1;
+                if (seg._dropCount >= 5) seg._committed = true;
+              }
             }
           });
           transferFlags();
@@ -926,14 +918,14 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function applyDisplayMode() {
       if (!transcriptionOriginalEl || !transcriptionTranslatedEl || !dividerEl) return;
-
+      
       if (mainWrapperEl) {
         mainWrapperEl.style.display       = "flex";
         mainWrapperEl.style.flexDirection = "column";
         mainWrapperEl.style.flex          = "1 1 0%";
         mainWrapperEl.style.overflow      = "hidden";
       }
-
+      
       transcriptionOriginalEl.style.overflowY = "scroll";
       transcriptionTranslatedEl.style.overflowY = "scroll";
 
@@ -943,23 +935,23 @@ if (window.__audioTranscriptionOverlayApi) {
       let showOrig = currentDisplayMode === "original" || currentDisplayMode === "both";
       let showTrans = currentDisplayMode === "translation" || currentDisplayMode === "both";
 
-      if (showTrans && !isTransActive) {
-        showOrig = true;
-        showTrans = false;
+      if (showTrans && !isTransActive) { 
+        showOrig = true; 
+        showTrans = false; 
       }
 
       if (showOrig && !showTrans) {
-        transcriptionOriginalEl.style.display = "block";
+        transcriptionOriginalEl.style.display = "block"; 
         transcriptionOriginalEl.style.flex = "1 1 0%";
-        transcriptionTranslatedEl.style.display = "none";
+        transcriptionTranslatedEl.style.display = "none"; 
         dividerEl.style.display = "none";
       } else if (!showOrig && showTrans) {
-        transcriptionOriginalEl.style.display = "none";
+        transcriptionOriginalEl.style.display = "none"; 
         dividerEl.style.display = "none";
-        transcriptionTranslatedEl.style.display = "block";
+        transcriptionTranslatedEl.style.display = "block"; 
         transcriptionTranslatedEl.style.flex = "1 1 0%";
       } else {
-        transcriptionOriginalEl.style.display = "block";
+        transcriptionOriginalEl.style.display = "block"; 
         transcriptionTranslatedEl.style.display = "block";
         dividerEl.style.display = "block";
         if (!transcriptionOriginalEl.style.flex || transcriptionOriginalEl.style.flex === "0 1 0%") {
@@ -979,31 +971,24 @@ if (window.__audioTranscriptionOverlayApi) {
     function renderText() {
       if (isSubtitleMode) {
         applyDisplayMode();
-        
         if (transcriptionOriginalEl) {
           const allOrig = subtitleOriginalHistory;
-          const histHtml = allOrig.slice(0, -1)
-            .map(t => `<span style="opacity:0.55">${escapeHtml(t)}</span>`).join('<br>');
-          const lastHtml = allOrig.length
-            ? `<span style="color:#fff;font-weight:600">${escapeHtml(allOrig[allOrig.length-1])}</span>`
-            : '';
-          transcriptionOriginalEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histHtml}${histHtml && lastHtml ? '<br>' : ''}${lastHtml}</span>`;
+          const fullOrigText = formatText(allOrig.join(' '), currentFormatting);
+          transcriptionOriginalEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${escapeHtml(fullOrigText).replace(/\n/g, "<br>")}</span>`;
           transcriptionOriginalEl.scrollTop = transcriptionOriginalEl.scrollHeight;
         }
-
         if (transcriptionTranslatedEl) {
           const allTrans = subtitleTranslatedHistory;
-          const histTransHtml = allTrans.slice(0, -1)
-            .map(t => `<span style="opacity:0.55;color:#a7f3d0;font-style:italic">${escapeHtml(t)}</span>`).join('<br>');
-          const lastTransHtml = allTrans.length
-            ? `<span style="color:#a7f3d0;font-style:italic;font-weight:600">${escapeHtml(allTrans[allTrans.length-1])}</span>`
-            : '';
-          
-          transcriptionTranslatedEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histTransHtml}${histTransHtml && lastTransHtml ? '<br>' : ''}${lastTransHtml}</span>`;
+          const fullTransText = formatText(allTrans.join(' '), currentFormatting);
+          const lines = fullTransText.split('\n').filter(Boolean);
+          const histHtml = lines.slice(0, -1).map(l => `<span style="opacity:0.55;color:#a7f3d0;font-style:italic;">${escapeHtml(l)}</span>`).join('<br>');
+          const lastHtml = lines.length ? `<span style="color:#a7f3d0;font-style:italic;font-weight:600;">${escapeHtml(lines[lines.length - 1])}</span>` : '';
+          transcriptionTranslatedEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histHtml}${histHtml && lastHtml ? '<br>' : ''}${lastHtml}</span>`;
           transcriptionTranslatedEl.scrollTop = transcriptionTranslatedEl.scrollHeight;
         }
         return;
       }
+      
       if (!transcriptionOriginalEl || !transcriptionTranslatedEl) return;
       updateHistory(segments);
 
@@ -1034,7 +1019,6 @@ if (window.__audioTranscriptionOverlayApi) {
       renderBlock(transcriptionTranslatedEl, translatedFull, "color:#a7f3d0;font-style:italic;");
 
       applyDisplayMode();
-
       transcriptionOriginalEl.scrollTop = transcriptionOriginalEl.scrollHeight;
       transcriptionTranslatedEl.scrollTop = transcriptionTranslatedEl.scrollHeight;
     }
@@ -1047,8 +1031,10 @@ if (window.__audioTranscriptionOverlayApi) {
           const isWhisperActive = !!res?.isCapturing;
           if (isSubtitleMode || isWhisperActive) applyVideoVolume(false);
         });
+        
         if (isStandaloneHidden) return;
         const now = Date.now();
+        
         if (now - lastReceivedTime > P.silenceFlushMs) {
           if (previousSegments.length > 0) {
             previousSegments.forEach(seg => {
@@ -1057,13 +1043,14 @@ if (window.__audioTranscriptionOverlayApi) {
                 seg._committed = true;
               }
             });
-            previousSegments = [];
-            segments = [];
+            previousSegments = []; 
+            segments = []; 
             renderText();
           } else if (pendingStableText) {
-            absorbStableText("", true);
+            absorbStableText("", true); 
             renderText();
           }
+          
           if (translationQueue.length > 0 && !isTranslatingLocal && now - lastReceivedTime > P.translationSilenceMs) {
             processTranslationQueue();
           }
@@ -1083,40 +1070,22 @@ if (window.__audioTranscriptionOverlayApi) {
       const statusBorder = isError ? "rgba(248,113,113,0.4)" : "rgba(74,222,128,0.35)";
       const statusColor = isError ? "#fca5a5" : "#86efac";
       const versionText = MANIFEST_VERSION ? ` · v${MANIFEST_VERSION}` : "";
-      const G = "#4ade80";
+      const G = "#4ade80"; 
       const Mu = "#94a3b8";
 
-      const pill = (label, value) =>
-        `<span style="color:${Mu};">${label}</span> <span style="color:${G};">${escapeHtml(value)}</span>`;
+      const pill = (label, value) => `<span style="color:${Mu};">${label}</span> <span style="color:${G};">${escapeHtml(value)}</span>`;
       const sep = `&nbsp;&nbsp;`;
-
       let statsHtml = "";
 
       if (isSubtitleMode) {
         const lang = (currentTrackLang || settings.selectedLanguage || "AUTO").toUpperCase().split('-')[0];
-        statsHtml =
-          pill("Mode", "Subtitles") + sep +
-          pill("Language", lang) + sep +
-          pill("Gemini", geminiOn ? "ON" : "OFF") + sep +
-          (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") +
-          pill("Target", target) + sep +
-          pill("TTS", tts) +
-          `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+        statsHtml = pill("Mode", "Subtitles") + sep + pill("Language", lang) + sep + pill("Gemini", geminiOn ? "ON" : "OFF") + sep + (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") + pill("Target", target) + sep + pill("TTS", tts) + `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
       } else {
         const model = (settings.selectedModelSize || "small").toLowerCase();
         const lang = (settings.selectedLanguage || "AUTO").toUpperCase();
         const task = settings.selectedTask === "translate" ? "TRANSLATE" : "TRANSCRIBE";
         const vad = settings.useVad ? "ON" : "OFF";
-        statsHtml =
-          pill("Model", model) + sep +
-          pill("Language", lang) + sep +
-          pill("Task", task) + sep +
-          pill("Gemini", geminiOn ? "ON" : "OFF") + sep +
-          (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") +
-          pill("Target", target) + sep +
-          pill("VAD", vad) + sep +
-          pill("TTS", tts) +
-          `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
+        statsHtml = pill("Model", model) + sep + pill("Language", lang) + sep + pill("Task", task) + sep + pill("Gemini", geminiOn ? "ON" : "OFF") + sep + (geminiOn && geminiModel ? pill("Model", geminiModel) + sep : "") + pill("Target", target) + sep + pill("VAD", vad) + sep + pill("TTS", tts) + `<span style="color:#475569;">${escapeHtml(versionText)}</span>`;
       }
 
       transcriptionHeaderEl.innerHTML = `
@@ -1188,32 +1157,35 @@ if (window.__audioTranscriptionOverlayApi) {
         height: `${defaultHeight}px`
       };
       containerElement.style.cssText = CONTAINER_STYLE(defaultStyle);
+      
       chrome.storage.local.get(["windowStyle"], (data) => {
         const s = data.windowStyle;
         if (s?.top && s?.left && s?.width && s?.height) {
-          containerElement.style.top = s.top; containerElement.style.left = s.left;
-          containerElement.style.width = s.width; containerElement.style.height = s.height;
+          containerElement.style.top = s.top; 
+          containerElement.style.left = s.left;
+          containerElement.style.width = s.width; 
+          containerElement.style.height = s.height;
         }
       });
     }
 
     function createContentArea() {
-      transcriptionHeaderEl = document.createElement("div");
+      transcriptionHeaderEl = document.createElement("div"); 
       transcriptionHeaderEl.id = "transcription-header";
       containerElement.appendChild(transcriptionHeaderEl);
 
       mainWrapperEl = document.createElement("div");
       mainWrapperEl.style.cssText = "display:flex;flex-direction:column;flex:1;overflow:hidden;position:relative;";
 
-      transcriptionOriginalEl = document.createElement("div");
+      transcriptionOriginalEl = document.createElement("div"); 
       transcriptionOriginalEl.id = "transcription-original";
       transcriptionOriginalEl.style.cssText = "flex:1 1 0%;overflow-y:auto;padding-top:8px;";
 
-      dividerEl = document.createElement("div");
+      dividerEl = document.createElement("div"); 
       dividerEl.id = "transcription-divider";
       dividerEl.style.cssText = "height:4px;background:rgba(255,255,255,0.1);cursor:row-resize;border-top:1px solid rgba(255,255,255,0.16);border-bottom:1px solid rgba(0,0,0,0.4);transition:background 0.2s;";
 
-      transcriptionTranslatedEl = document.createElement("div");
+      transcriptionTranslatedEl = document.createElement("div"); 
       transcriptionTranslatedEl.id = "transcription-translated";
       transcriptionTranslatedEl.style.cssText = "flex:1 1 0%;overflow-y:auto;background:rgba(255,255,255,0.03);padding-top:8px;";
 
@@ -1221,55 +1193,60 @@ if (window.__audioTranscriptionOverlayApi) {
       dividerEl.addEventListener("mouseout", () => { if (!isDraggingDivider) dividerEl.style.background = "rgba(255,255,255,0.1)"; });
 
       dividerEl.addEventListener("mousedown", (e) => {
-        isDraggingDivider = true;
+        isDraggingDivider = true; 
         document.body.style.cursor = "row-resize";
-        const startY = e.clientY;
-        const startH = transcriptionOriginalEl.offsetHeight;
+        const startY = e.clientY; 
+        const startH = transcriptionOriginalEl.offsetHeight; 
         const totalH = mainWrapperEl.offsetHeight;
-
+        
         const onMouseMove = (ev) => {
-          const delta = ev.clientY - startY;
+          const delta = ev.clientY - startY; 
           const newH = Math.max(40, Math.min(totalH - 40, startH + delta));
           const ratio = newH / totalH;
-          transcriptionOriginalEl.style.flex = `${ratio} 1 0%`;
+          transcriptionOriginalEl.style.flex = `${ratio} 1 0%`; 
           transcriptionTranslatedEl.style.flex = `${1 - ratio} 1 0%`;
         };
-
+        
         const onMouseUp = () => {
-          isDraggingDivider = false;
+          isDraggingDivider = false; 
           document.body.style.cursor = "default";
           dividerEl.style.background = "rgba(255,255,255,0.1)";
-          document.removeEventListener("mousemove", onMouseMove);
+          document.removeEventListener("mousemove", onMouseMove); 
           document.removeEventListener("mouseup", onMouseUp);
           const ratio = transcriptionOriginalEl.offsetHeight / mainWrapperEl.offsetHeight;
           setSetting("dividerPos", ratio);
         };
-
-        document.addEventListener("mousemove", onMouseMove);
+        
+        document.addEventListener("mousemove", onMouseMove); 
         document.addEventListener("mouseup", onMouseUp);
       });
 
-      mainWrapperEl.appendChild(transcriptionOriginalEl);
+      mainWrapperEl.appendChild(transcriptionOriginalEl); 
       mainWrapperEl.appendChild(dividerEl);
-      mainWrapperEl.appendChild(transcriptionTranslatedEl);
+      mainWrapperEl.appendChild(transcriptionTranslatedEl); 
       containerElement.appendChild(mainWrapperEl);
     }
 
     function configureControls() {
       const controls = document.createElement("div");
       controls.style.cssText = "position:absolute;top:6px;right:6px;z-index:100;display:flex;gap:6px;";
+      
       const makeButton = (label, onClick) => {
-        const btn = document.createElement("button");
-        btn.type = "button"; btn.textContent = label; btn.style.cssText = BUTTON_STYLE;
-        btn.addEventListener("click", onClick);
+        const btn = document.createElement("button"); 
+        btn.type = "button"; 
+        btn.textContent = label; 
+        btn.style.cssText = BUTTON_STYLE;
+        btn.addEventListener("click", onClick); 
         return btn;
       };
-      controls.appendChild(makeButton("A-", () => adjustFontSize(-2)));
+      
+      controls.appendChild(makeButton("A-", () => adjustFontSize(-2))); 
       controls.appendChild(makeButton("A+", () => adjustFontSize(2)));
       controls.appendChild(makeButton("Copy", async () => {
         const text = `Original:\n${transcriptionOriginalEl?.innerText || ""}\n\nTranslation:\n${transcriptionTranslatedEl?.innerText || ""}`;
         try { await navigator.clipboard.writeText(text); } catch (e) {}
       }));
+      
       containerElement.appendChild(controls);
     }
 
@@ -1278,23 +1255,31 @@ if (window.__audioTranscriptionOverlayApi) {
       containerElement.addEventListener("mousedown", (e) => {
         const tag = e.target?.tagName?.toLowerCase?.() || "";
         if (tag === "button" || e.target === dividerEl) return;
+        
         const rect = containerElement.getBoundingClientRect();
         const nearResizeCorner = rect.width - (e.clientX - rect.left) < 18 && rect.height - (e.clientY - rect.top) < 18;
         if (nearResizeCorner) return;
-
-        x = e.clientX; y = e.clientY;
+        
+        x = e.clientX; 
+        y = e.clientY;
+        
         const onMove = (ev) => {
           containerElement.style.top = `${Math.max(0, containerElement.offsetTop + (ev.clientY - y))}px`;
           containerElement.style.left = `${Math.max(0, containerElement.offsetLeft + (ev.clientX - x))}px`;
-          x = ev.clientX; y = ev.clientY;
+          x = ev.clientX; 
+          y = ev.clientY;
         };
-        const onUp = () => {
-          document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp);
-          debouncedSaveWindowStyle();
+        
+        const onUp = () => { 
+          document.removeEventListener("mousemove", onMove); 
+          document.removeEventListener("mouseup", onUp); 
+          debouncedSaveWindowStyle(); 
         };
-        document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp);
+        
+        document.addEventListener("mousemove", onMove); 
+        document.addEventListener("mouseup", onUp);
       });
-
+      
       if (window.ResizeObserver) {
         resizeObserver = new ResizeObserver(() => debouncedSaveWindowStyle());
         resizeObserver.observe(containerElement);
@@ -1308,26 +1293,20 @@ if (window.__audioTranscriptionOverlayApi) {
          "enableGeminiTranslation", "geminiModel", "transcriptionProfile", "hideLiveText", "isSubtitleTtsActive", "subtitleVideoVolume", "isCapturing"],
         (res) => {
           subtitleVideoVolume = parseFloat(res.subtitleVideoVolume ?? "1.0");
-
-          if (res.isSubtitleTtsActive) {
-             isSubtitleMode = true;
-          }
-
+          if (res.isSubtitleTtsActive) isSubtitleMode = true;
           const isWhisperActive = !!res.isCapturing;
-          if (isSubtitleMode || isWhisperActive) {
-            applyVideoVolume(true);
-          }
-
+          if (isSubtitleMode || isWhisperActive) applyVideoVolume(true);
+          
           if (isStandaloneHidden) return;
-
-          currentFormatting = res.textFormatting || "advanced";
+          
+          currentFormatting = res.textFormatting || "advanced"; 
           currentDisplayMode = res.displayMode || "both";
-          currentFontSize = res.fontSize || 20;
+          currentFontSize = res.fontSize || 20; 
           enableGeminiTranslation = !!res.enableGeminiTranslation;
-          enableTts = !!res.enableTts;
+          enableTts = !!res.enableTts; 
           hideLiveText = !!res.hideLiveText;
           activeProfile = getProfile(res.transcriptionProfile || "balanced");
-
+          
           if (res.dividerPos) {
             const pos = parseFloat(res.dividerPos);
             if (Number.isFinite(pos) && pos > 0.1 && pos < 0.9) {
@@ -1335,10 +1314,9 @@ if (window.__audioTranscriptionOverlayApi) {
               if (transcriptionTranslatedEl) transcriptionTranslatedEl.style.flex = `${1 - pos} 1 0%`;
             }
           }
-
-          adjustFontSize(0);
-          updateHeaderAndStatus(res || {});
-          applyDisplayMode();
+          adjustFontSize(0); 
+          updateHeaderAndStatus(res || {}); 
+          applyDisplayMode(); 
           renderText();
         }
       );
@@ -1348,19 +1326,19 @@ if (window.__audioTranscriptionOverlayApi) {
       if (isStandaloneHidden) return;
       let existing = document.getElementById("transcription");
       if (existing) {
-        containerElement = existing;
+        containerElement = existing; 
         transcriptionHeaderEl = document.getElementById("transcription-header");
-        transcriptionOriginalEl = document.getElementById("transcription-original");
+        transcriptionOriginalEl = document.getElementById("transcription-original"); 
         transcriptionTranslatedEl = document.getElementById("transcription-translated");
-        dividerEl = document.getElementById("transcription-divider");
+        dividerEl = document.getElementById("transcription-divider"); 
         mainWrapperEl = transcriptionOriginalEl?.parentElement || null;
         return;
       }
-      createContainer();
-      createContentArea();
-      configureControls();
+      createContainer(); 
+      createContentArea(); 
+      configureControls(); 
       configureMovement();
-      document.body.appendChild(containerElement);
+      document.body.appendChild(containerElement); 
       applySavedUiSettings();
     }
 
@@ -1368,44 +1346,51 @@ if (window.__audioTranscriptionOverlayApi) {
       if (resizeObserver) { try { resizeObserver.disconnect(); } catch (e) {} resizeObserver = null; }
       if (containerElement?.parentNode) containerElement.parentNode.removeChild(containerElement);
       if (waitPopupEl?.parentNode) waitPopupEl.parentNode.removeChild(waitPopupEl);
-      containerElement = null; transcriptionHeaderEl = null; transcriptionOriginalEl = null;
-      transcriptionTranslatedEl = null; dividerEl = null; mainWrapperEl = null; waitPopupEl = null;
+      containerElement = null; 
+      transcriptionHeaderEl = null; 
+      transcriptionOriginalEl = null;
+      transcriptionTranslatedEl = null; 
+      dividerEl = null; 
+      mainWrapperEl = null; 
+      waitPopupEl = null;
     }
 
-    function hardRemoveOverlay() {
-      clearSilenceMonitor();
-      restoreVideoVolume();
-      removeOverlayUIOnly();
+    function hardRemoveOverlay() { 
+      clearSilenceMonitor(); 
+      restoreVideoVolume(); 
+      removeOverlayUIOnly(); 
+    }
+    
+    function stopAndCloseOverlay() { 
+      stopTtsNow(); 
+      resetRuntimeState(); 
+      hardRemoveOverlay(); 
     }
 
-    function stopAndCloseOverlay() { stopTtsNow(); resetRuntimeState(); hardRemoveOverlay(); }
     function resetSessionView(isSubMode = false, isStandalone = false) {
-      isSubtitleMode = !!isSubMode;
-      isStandaloneHidden = !!isStandalone;
+      isSubtitleMode = !!isSubMode; 
+      isStandaloneHidden = !!isStandalone; 
       currentTrackLang = "";
-      
       if (isStandaloneHidden) {
-        removeOverlayUIOnly();
+        removeOverlayUIOnly(); 
       } else {
         ensureOverlay(); 
       }
-
       resetRuntimeState(isSubMode); 
       startSilenceMonitor(); 
       applySavedUiSettings(); 
-
       if (!isStandaloneHidden) {
         renderText(); 
       }
     }
 
     function handleTranscriptPayload(raw) {
-      if (!raw) return;
-      if (isSubtitleMode) return;
-      if (isStandaloneHidden) return;
+      if (!raw || isSubtitleMode || isStandaloneHidden) return;
       ensureOverlay();
-      let parsed;
+      
+      let parsed; 
       try { parsed = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (e) { parsed = null; }
+      
       segments = Array.isArray(parsed?.segments) ? parsed.segments : [];
       lastReceivedTime = Date.now();
 
@@ -1414,23 +1399,23 @@ if (window.__audioTranscriptionOverlayApi) {
          "selectedTask", "targetLanguage", "useVad", "enableTts", "enableGeminiTranslation", "geminiModel",
          "transcriptionProfile", "hideLiveText", "subtitleVideoVolume"],
         (res) => {
-          currentDisplayMode = res.displayMode || "both";
+          currentDisplayMode = res.displayMode || "both"; 
           currentFormatting = res.textFormatting || "advanced";
-          currentFontSize = res.fontSize || 20;
+          currentFontSize = res.fontSize || 20; 
           enableGeminiTranslation = !!res.enableGeminiTranslation;
-          enableTts = !!res.enableTts;
+          enableTts = !!res.enableTts; 
           hideLiveText = !!res.hideLiveText;
           subtitleVideoVolume = parseFloat(res.subtitleVideoVolume || "1.0");
+          
           const newProfile = getProfile(res.transcriptionProfile || "balanced");
-          if (newProfile !== activeProfile) {
-            activeProfile = newProfile;
-            startSilenceMonitor();
+          if (newProfile !== activeProfile) { 
+            activeProfile = newProfile; 
+            startSilenceMonitor(); 
           }
-          if (isSubtitleMode) {
-            applyVideoVolume(false);
-          }
-          adjustFontSize(0);
-          updateHeaderAndStatus(res || {});
+          
+          if (isSubtitleMode) applyVideoVolume(false);
+          adjustFontSize(0); 
+          updateHeaderAndStatus(res || {}); 
           renderText();
         }
       );
@@ -1438,108 +1423,134 @@ if (window.__audioTranscriptionOverlayApi) {
 
     function onMessage(request, sender, sendResponse) {
       if (!request || !request.type) return false;
-      
       try {
-        if (request.type === "resetSession") { resetSessionView(request.isSubtitleMode, request.isStandalone); sendResponse({ success: true }); return true; }
-        if (request.type === "showWaitPopup") { if (!isStandaloneHidden) { ensureOverlay(); showWaitPopup(request.data); } sendResponse({ success: true }); return true; }
-        if (request.type === "transcript") { handleTranscriptPayload(request.data); sendResponse({ success: true }); return true; }
-        if (request.type === "translationResult") { if (!isStandaloneHidden) { addTranslatedChunk(request.data); } sendResponse({ success: true }); return true; }
+        if (request.type === "resetSession") { 
+          resetSessionView(request.isSubtitleMode, request.isStandalone); 
+          sendResponse({ success: true }); 
+          return true; 
+        }
+        if (request.type === "showWaitPopup") { 
+          if (!isStandaloneHidden) { 
+            ensureOverlay(); 
+            showWaitPopup(request.data); 
+          } 
+          sendResponse({ success: true }); 
+          return true; 
+        }
+        if (request.type === "transcript") { 
+          handleTranscriptPayload(request.data); 
+          sendResponse({ success: true }); 
+          return true; 
+        }
+        if (request.type === "translationResult") { 
+          if (!isStandaloneHidden) addTranslatedChunk(request.data); 
+          sendResponse({ success: true }); 
+          return true; 
+        }
         if (request.type === "subtitle_display") {
           if (isStandaloneHidden) { sendResponse({ success: true }); return true; }
           isSubtitleMode = true;
-          if (request.data.trackLang !== undefined) {
-             currentTrackLang = request.data.trackLang;
-          }
+          if (request.data.trackLang !== undefined) currentTrackLang = request.data.trackLang;
           ensureOverlay();
-
-          const orig = request.data.original;
-          const trans = request.data.translated;
+          
+          const orig = request.data.original ? request.data.original.replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "") : request.data.original;
+          const trans = request.data.translated; 
           const statusText = request.data.statusText;
-
-          if (orig) {
-            const lastOrig = subtitleOriginalHistory[subtitleOriginalHistory.length - 1];
-            if (orig !== lastOrig) subtitleOriginalHistory.push(orig);
+          
+          if (orig) { 
+            const lastOrig = subtitleOriginalHistory[subtitleOriginalHistory.length - 1]; 
+            if (orig !== lastOrig) subtitleOriginalHistory.push(orig); 
           }
-
-          if (trans) {
-            const lastTrans = subtitleTranslatedHistory[subtitleTranslatedHistory.length - 1];
-            if (trans !== lastTrans) subtitleTranslatedHistory.push(trans);
+          if (trans) { 
+            const lastTrans = subtitleTranslatedHistory[subtitleTranslatedHistory.length - 1]; 
+            if (trans !== lastTrans) subtitleTranslatedHistory.push(trans); 
           }
-
+          
           if (statusText !== undefined) {
-             updateHeaderStatusText(statusText);
+            updateHeaderStatusText(statusText);
           } else {
-             chrome.storage.local.get(["selectedModelSize", "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts", "geminiModel"], (res) => {
-               if (typeof updateHeaderAndStatus === 'function') updateHeaderAndStatus(res || {});
-             });
+            chrome.storage.local.get(["selectedModelSize", "selectedLanguage", "selectedTask", "targetLanguage", "useVad", "enableTts", "geminiModel"], (res) => { 
+              if (typeof updateHeaderAndStatus === 'function') updateHeaderAndStatus(res || {}); 
+            });
           }
-
-          renderText();
-          applyDisplayMode();
-          sendResponse({ success: true });
+          renderText(); 
+          applyDisplayMode(); 
+          sendResponse({ success: true }); 
           return true;
         }
-        if (request.type === "STOP") { stopAndCloseOverlay(); sendResponse({ success: true }); return true; }
-        
+        if (request.type === "STOP") { 
+          stopAndCloseOverlay(); 
+          sendResponse({ success: true }); 
+          return true; 
+        }
         return false;
-      } catch (e) {
-        sendResponse({ success: false, error: e.message });
-        return true;
+      } catch (e) { 
+        sendResponse({ success: false, error: e.message }); 
+        return true; 
       }
     }
 
-    function bindMessageListenerOnce() {
-      if (listenerBound) return;
-      chrome.runtime.onMessage.addListener(onMessage);
-      listenerBound = true;
+    function bindMessageListenerOnce() { 
+      if (listenerBound) return; 
+      chrome.runtime.onMessage.addListener(onMessage); 
+      listenerBound = true; 
     }
 
     function bindStorageListener() {
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== "local") return;
         let needsRender = false;
-
-        if ("subtitleVideoVolume" in changes) {
-          subtitleVideoVolume = parseFloat(changes.subtitleVideoVolume.newValue || "1.0");
-          applyVideoVolume(true);
+        
+        if ("subtitleVideoVolume" in changes) { 
+          subtitleVideoVolume = parseFloat(changes.subtitleVideoVolume.newValue || "1.0"); 
+          applyVideoVolume(true); 
         }
-
         if ("isCapturing" in changes) {
           const isWhisperActive = !!changes.isCapturing.newValue;
-          if (isWhisperActive) {
-            applyVideoVolume(true);
-          } else if (!isSubtitleMode) {
-            restoreVideoVolume();
-          }
+          if (isWhisperActive) applyVideoVolume(true); 
+          else if (!isSubtitleMode) restoreVideoVolume();
         }
-
+        
         if (isStandaloneHidden) return;
-
-        if ("enableGeminiTranslation" in changes) {
-          enableGeminiTranslation = !!changes.enableGeminiTranslation.newValue;
-          if (!enableGeminiTranslation) { translatedChunks = []; translationQueue = []; isTranslatingLocal = false; }
-          needsRender = true;
+        
+        if ("enableGeminiTranslation" in changes) { 
+          enableGeminiTranslation = !!changes.enableGeminiTranslation.newValue; 
+          if (!enableGeminiTranslation) { 
+            translatedChunks = []; 
+            translationQueue = []; 
+            isTranslatingLocal = false; 
+          } 
+          needsRender = true; 
         }
-        if ("enableTts" in changes) {
-          enableTts = !!changes.enableTts.newValue;
-          needsRender = true;
+        if ("enableTts" in changes) { 
+          enableTts = !!changes.enableTts.newValue; 
+          needsRender = true; 
         }
-        if ("displayMode" in changes) { currentDisplayMode = changes.displayMode.newValue || "both"; needsRender = true; }
-        if ("textFormatting" in changes) { currentFormatting = changes.textFormatting.newValue || "advanced"; needsRender = true; }
-        if ("hideLiveText" in changes) { hideLiveText = !!changes.hideLiveText.newValue; needsRender = true; }
-        if ("transcriptionProfile" in changes) {
-          activeProfile = getProfile(changes.transcriptionProfile.newValue || "balanced");
-          startSilenceMonitor();
-          needsRender = true;
+        if ("displayMode" in changes) { 
+          currentDisplayMode = changes.displayMode.newValue || "both"; 
+          needsRender = true; 
         }
-
+        if ("textFormatting" in changes) { 
+          currentFormatting = changes.textFormatting.newValue || "advanced"; 
+          needsRender = true; 
+        }
+        if ("hideLiveText" in changes) { 
+          hideLiveText = !!changes.hideLiveText.newValue; 
+          needsRender = true; 
+        }
+        if ("transcriptionProfile" in changes) { 
+          activeProfile = getProfile(changes.transcriptionProfile.newValue || "balanced"); 
+          startSilenceMonitor(); 
+          needsRender = true; 
+        }
+        
         if (needsRender && transcriptionOriginalEl) renderText();
       });
     }
 
     function reactivate() { 
-      bindMessageListenerOnce();
-      bindStorageListener();
+      bindMessageListenerOnce(); 
+      bindStorageListener(); 
     }
     
     function init() { 
@@ -1549,9 +1560,9 @@ if (window.__audioTranscriptionOverlayApi) {
         ensureOverlay(); 
         startSilenceMonitor(); 
         applySavedUiSettings(); 
-      } else {
-        applySavedUiSettings();
-      }
+      } else { 
+        applySavedUiSettings(); 
+      } 
     }
 
     init();

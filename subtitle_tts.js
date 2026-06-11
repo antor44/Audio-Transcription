@@ -64,11 +64,33 @@ window.__subtitleTtsApi = (function () {
   let isTextTrackMode = false;
 
   // Accumulation state
-  let pendingWords   = [];  // words not yet committed
-  let committedWords = [];  // recently committed words (for dedup)
+  let pendingWords   = [];
+  let committedWords = [];
   let lastSeenText   = '';
   let debTimer       = null;
   let isProgressiveMode = false;
+
+  let isSeeking = false;
+  let seekCooldownTimer = null;
+
+  function onSeeked() {
+    isSeeking = true;
+    cueQueue = [];
+    isSpeaking = false;
+    isTtsSpeaking = false;
+    pendingWords = [];
+    committedWords = [];
+    lastSeenText = '';
+    clearTimeout(debTimer);
+    clearTimeout(ttsId);
+
+    try { 
+      chrome.runtime.sendMessage({ action: 'stopTts', isSeek: true }, () => void chrome.runtime.lastError); 
+    } catch(e){}
+
+    clearTimeout(seekCooldownTimer);
+    seekCooldownTimer = setTimeout(() => { isSeeking = false; }, 400);
+  }
 
   let cfg = {
     playbackControl: 'pause', slowdownRate: 0.8,
@@ -87,12 +109,11 @@ window.__subtitleTtsApi = (function () {
   function cleanSubtitle(t) {
     return norm(
       String(t || '')
-        .replace(/<[^>]+>/g, '')    // VTT timing/style tags
-        .replace(/>+/g, '')         // all >> markers anywhere
-        .replace(/^\s*-\s+/gm, '')  // leading dash variant
-        // Strip invisible and bidi control chars (causes Hebrew word-comparison failures)
+        .replace(/<[^>]+>/g, '')    
+        .replace(/>+/g, '')         
+        .replace(/^\s*-\s+/gm, '')  
         .replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\u2066-\u2069]/g, '')
-        // Fix missing spaces after punctuation (common in uploaded subtitles)
+        .replace(/\n/g, ' ')
         .replace(/([.!?¿¡,;:\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965])([^\s\d"'\])}»\u201D\u2019])/g, '$1 $2')
     );
   }
@@ -104,7 +125,7 @@ window.__subtitleTtsApi = (function () {
   }
 
   // Normalize a word for comparison: lowercase + strip trailing punctuation.
-  function nw(w) { return w.toLowerCase().replace(/[.,!?;:'"\u2026\u2019]+$/, ''); }
+  function nw(w) { return String(w || '').toLowerCase().replace(/[.,!?;:'"…']+$/, ''); }
 
   // Find how many words at the END of history match the START of incoming.
   // Handles both normal growth (new words appended) and sliding-window (old words
@@ -226,11 +247,10 @@ window.__subtitleTtsApi = (function () {
 
   // Accumulation
   function accumulateText(rawText) {
-    if (stopped) return;
+    if (stopped || isSeeking) return;
 
     const clean = cleanSubtitle(rawText || '');
 
-    // Empty cue: subtitle disappeared — schedule flush
     if (!clean) {
       if (lastSeenText !== '') {
         lastSeenText = '';
@@ -250,7 +270,6 @@ window.__subtitleTtsApi = (function () {
 
     const allWords = splitWords(clean);
 
-    // Detect progressive stream (ASR sliding window)
     if (!isProgressiveMode && prevText) {
       const lastWords = splitWords(prevText);
       const overlap = committedPrefixLength(lastWords, allWords, true);
@@ -258,7 +277,6 @@ window.__subtitleTtsApi = (function () {
                        allWords.every((w, i) => nw(w) === nw(lastWords[i]));
       if (overlap >= 3 || isSubset) {
         isProgressiveMode = true;
-        console.log('[SubtitleTTS] Progressive stream detected.');
       }
     }
 
@@ -276,34 +294,6 @@ window.__subtitleTtsApi = (function () {
       pendingWords = mergeCues(pendingWords, fresh);
     }
 
-    const strongPunct = /[.!?¿¡\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965]["'\])}»\u201D\u2019]*$/;
-    const weakPunct   = /[,;:\-\u060C]["'\])}»\u201D\u2019]*$/;
-    while (true) {
-      let splitIdx = -1;
-      for (let i = Math.max(0, MIN_WORDS_PUNCT - 1); i < pendingWords.length - 1; i++) {
-        const isStrong = strongPunct.test(pendingWords[i]) || /^[¿¡]/.test(pendingWords[i + 1]);
-        const isWeak = weakPunct.test(pendingWords[i]);
-        if (isStrong || (isWeak && i >= 12)) {
-          const remainderLen = pendingWords.length - 1 - i;
-          const lastWord = pendingWords[pendingWords.length - 1] || '';
-          if (remainderLen < MIN_WORDS_PUNCT && (strongPunct.test(lastWord) || weakPunct.test(lastWord))) {
-            continue;
-          }
-          splitIdx = i;
-          break;
-        }
-      }
-      if (splitIdx === -1) break;
-
-      const sentence = pendingWords.slice(0, splitIdx + 1);
-      pendingWords = pendingWords.slice(splitIdx + 1);
-      
-      const text = joinWords(sentence);
-      committedWords = [...committedWords, ...sentence];
-      if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
-      commitText(text);
-    }
-
     evaluateCommit();
   }
 
@@ -311,15 +301,11 @@ window.__subtitleTtsApi = (function () {
     const wc = pendingWords.length;
     if (!wc) return;
 
+    // --- Hard commit: prevent unbounded accumulation ---
     if (wc >= HARD_COMMIT) {
-      // Force commit due to length, but LEAVE THE LAST WORD in pendingWords.
-      // YouTube ASR often streams partial words (e.g. "n" -> "neighborhood").
-      // If we commit a partial word, the next cue won't match our committed history.
-      // Leaving the last word in pendingWords allows mergeCues to upgrade it cleanly.
       const splitPoint = Math.max(1, wc - 1);
-      const sentence = pendingWords.slice(0, splitPoint);
-      const remainder = pendingWords.slice(splitPoint);
-      
+      const sentence   = pendingWords.slice(0, splitPoint);
+      const remainder  = pendingWords.slice(splitPoint);
       const text = joinWords(sentence);
       committedWords = [...committedWords, ...sentence];
       if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
@@ -328,52 +314,104 @@ window.__subtitleTtsApi = (function () {
       return;
     }
 
-    const lastWord = pendingWords[pendingWords.length - 1] || '';
-    const hasStrongPunct = /[.!?¿¡\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965]["'\])}»\u201D\u2019]*$/.test(lastWord);
-    const hasWeakPunct   = /[,;:\-\u060C]["'\])}»\u201D\u2019]*$/.test(lastWord);
+    // --- Punctuation regexes (multilingual, nothing hardcoded) ---
+    const RE_STRONG = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965]["'\])}»\u201D\u2019]*$/;
+    const RE_MEDIUM = /[;:\u061B\uFF1B\uFF1A]["'\])}»\u201D\u2019]*$/;
+    const RE_WEAK   = /[,\-\u060C\u3001]["'\])}»\u201D\u2019]*$/;
+    const RE_OPEN_Q = /^[¿¡]/;
+    // Conjunctions that likely continue the same sentence after a period
+    // (kept minimal and language-agnostic: only unambiguous English coordinators)
+    const RE_CONTINUATION = /^(and|but|or|so|yet|for|nor)$/i;
 
-    const isStaticMode = isTextTrackMode || pendingWords.some(w => /[.,!?;:\u3002\uFF01\uFF1F\u061F\u0964\u0965]/.test(w));
+    const isStaticMode = isTextTrackMode ||
+      pendingWords.some(w => /[.,!?;:\u3002\uFF01\uFF1F\u061F\u0964\u0965\u060C\u061B\u3001\uFF1B\uFF1A]/.test(w));
+
+    // --- Scan the full array for the first strong internal split point ---
+    // This fixes the core bug: two sentences inside one pending buffer were
+    // committed as a single utterance because only the last token was checked.
+    let internalSplitIdx = -1;
+    for (let i = MIN_WORDS_PUNCT - 1; i < wc - 1; i++) {
+      if (RE_STRONG.test(pendingWords[i])) {
+        const nextWord = pendingWords[i + 1] || '';
+        // Skip if next word is a lowercase conjunction — likely a mid-sentence period
+        // (e.g. abbreviations, "etc. and", "U.S. and")
+        if (RE_CONTINUATION.test(nextWord) && /^[a-z]/.test(nextWord)) continue;
+        internalSplitIdx = i;
+        break;
+      }
+    }
+
+    if (internalSplitIdx !== -1) {
+      const sentence = pendingWords.slice(0, internalSplitIdx + 1);
+      pendingWords   = pendingWords.slice(internalSplitIdx + 1);
+      const text = joinWords(sentence);
+      committedWords = [...committedWords, ...sentence];
+      if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
+      commitText(text);
+      // Re-evaluate the remainder immediately — there may be another split point
+      if (pendingWords.length >= MIN_WORDS_PUNCT) evaluateCommit();
+      return;
+    }
+
+    // --- No internal split found: fall back to last-token detection ---
+    const lastWord     = pendingWords[wc - 1] || '';
+    const hasStrong    = RE_STRONG.test(lastWord);
+    const hasMedium    = RE_MEDIUM.test(lastWord);
+    const hasWeak      = RE_WEAK.test(lastWord);
+
     if (isStaticMode) {
-      if (hasStrongPunct) {
+      if (hasStrong && wc >= MIN_WORDS_PUNCT) {
         flushPending();
-      } else if (hasWeakPunct && wc >= 12) {
+      } else if (hasStrong && wc < MIN_WORDS_PUNCT) {
+        clearTimeout(debTimer);
+        debTimer = setTimeout(flushPending, 800);
+      } else if (hasMedium && wc >= 12) {
         flushPending();
-      } else if (wc >= 25) {
-        // Phrase is getting too long without strong punctuation at the end.
-        // Search backwards for a comma to split at!
-        const weakPunct = /[,;:\-\u060C]["'\])}»\u201D\u2019]*$/;
+      } else if (hasWeak && wc >= 18) {
+        flushPending();
+      } else if (wc >= 22) {
+        // Scan backwards for the best mid-array split point
         let splitIdx = -1;
-        // Search backwards, require at least 10 words to be committed so we don't make tiny fragments
-        for (let i = pendingWords.length - 2; i >= 10; i--) {
-          if (weakPunct.test(pendingWords[i])) {
+        for (let i = wc - 2; i >= 10; i--) {
+          if (RE_MEDIUM.test(pendingWords[i]) || RE_OPEN_Q.test(pendingWords[i + 1] || '')) {
             splitIdx = i;
             break;
           }
         }
-        
+        if (splitIdx === -1) {
+          for (let i = wc - 2; i >= 14; i--) {
+            if (RE_WEAK.test(pendingWords[i])) {
+              splitIdx = i;
+              break;
+            }
+          }
+        }
         if (splitIdx !== -1) {
           const sentence = pendingWords.slice(0, splitIdx + 1);
-          pendingWords = pendingWords.slice(splitIdx + 1);
+          pendingWords   = pendingWords.slice(splitIdx + 1);
           const text = joinWords(sentence);
           committedWords = [...committedWords, ...sentence];
           if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
           commitText(text);
-          // The remaining words stay in pendingWords for the next evaluation
         } else {
-          // If no comma is found, do NOT flush immediately. Just wait.
-          // It will eventually hit HARD_COMMIT or find punctuation in the next cue.
           clearTimeout(debTimer);
         }
       } else {
         clearTimeout(debTimer);
       }
     } else {
-      // DOM autogenerated: words arrive gradually — give time for the cue to grow
-      if (hasStrongPunct && wc >= MIN_WORDS_PUNCT) {
+      // Progressive / DOM observer mode: use timers, don't flush synchronously
+      if (hasStrong && wc >= MIN_WORDS_PUNCT) {
+        clearTimeout(debTimer);
         debTimer = setTimeout(flushPending, 400);
-      } else if (hasWeakPunct && wc >= MIN_WORDS_PUNCT) {
+      } else if (hasMedium && wc >= MIN_WORDS_PUNCT) {
+        clearTimeout(debTimer);
+        debTimer = setTimeout(flushPending, 1000);
+      } else if (hasWeak && wc >= 15) {
+        clearTimeout(debTimer);
         debTimer = setTimeout(flushPending, 1500);
       } else {
+        clearTimeout(debTimer);
         debTimer = setTimeout(flushPending, 4000);
       }
     }
@@ -418,12 +456,12 @@ window.__subtitleTtsApi = (function () {
   function onMutation() { if (!stopped) accumulateText(getDomText()); }
 
   function onCueChange() {
-    if (stopped || !activeTrack) return;
-    const cues = activeTrack.activeCues;
-    if (!cues || !cues.length) { accumulateText(''); return; }
-    // TextTrack mode: cues are complete phrases from the creator
-    isTextTrackMode = true;
-    accumulateText(Array.from(cues).map(c => c.text || '').join(' '));
+      if (stopped || !activeTrack) return;
+      const cues = activeTrack.activeCues;
+      if (!cues || !cues.length) { accumulateText(''); return; }
+      isTextTrackMode = true;
+      const newText = Array.from(cues).map(c => c.text || '').join(' ');
+      accumulateText(newText);
   }
 
   function startObs(sel) {
@@ -622,7 +660,9 @@ window.__subtitleTtsApi = (function () {
       if (currentVideo !== videoEl) {
         if (obs) { obs.disconnect(); obs = null; activeSel = null; }
         if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+        if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); }
         videoEl = currentVideo;
+        if (videoEl) { videoEl.addEventListener('seeked', onSeeked); }
         applyVideoVolume(true); 
       } else {
         applyVideoVolume(false); 
@@ -657,6 +697,7 @@ window.__subtitleTtsApi = (function () {
     stopped = true;
     if (obs) { obs.disconnect(); obs = null; }
     if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+    if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); }
     const s = document.getElementById('stts-hide-cc');
     if (s) s.remove();
     restoreCtrl(); restoreVideoVolume(); resetState(); activeSel = null;
