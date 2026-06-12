@@ -561,6 +561,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (e) { sendResponse({ language: "" }); }
       return true;
     }
+    
+    // Broadcast to content.js and standalone.js to clear visual history (Ads/Seeks)
+    if (message.action === "clearSubtitleHistory") {
+      getStorage(["currentTabId", "standaloneTabId"]).then(res => {
+        if (res.currentTabId) sendMessageToTab(res.currentTabId, message);
+        if (res.standaloneTabId) sendMessageToTab(res.standaloneTabId, message);
+      });
+      sendResponse({ success: true });
+      return true;
+    }
 
     if (message.action === "whisperSeeked") {
       getStorage(["currentTabId", "standaloneTabId"]).then(res => {
@@ -615,7 +625,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
     }
-
+    
     if (message.action === "subtitleSpeak") {
       const text = normalizeText(message.text); const lang = message.lang || "";
       const rate = Number.parseFloat(message.ttsSpeed) || 1.0; const fromTabId = sender.tab?.id || subtitleTabId;

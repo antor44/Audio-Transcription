@@ -4,12 +4,6 @@
  *
  * This file is part of Audio Transcription.
  *
- * This file includes material derived in part from the upstream browser
- * extension components of collabora/WhisperLive, licensed under the MIT License.
- *
- * Upstream copyright notice:
- * Copyright (c) 2023 Vineet Suryan, Collabora Ltd.
- *
  * Audio Transcription is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -22,10 +16,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Audio Transcription. If not, see <https://www.gnu.org/licenses/>.
- *
- * Additional third-party licensing information, including the preserved MIT
- * notice for upstream WhisperLive-derived material, is provided in
- * THIRD_PARTY_NOTICES.md.
  */
 
 if (window.__audioTranscriptionOverlayApi) {
@@ -78,11 +68,11 @@ if (window.__audioTranscriptionOverlayApi) {
     let currentFontSize = 20;
     let lastReceivedTime = Date.now();
     let silenceFlushTimer = null;
+    let statusClearTimer = null;
     let isDraggingDivider = false;
     let translationQueue = [];
     let isTranslatingLocal = false;
     let listenerBound = false;
-    let statusClearTimer = null;
 
     let enableGeminiTranslation = false;
     let enableTts = false;
@@ -1438,7 +1428,7 @@ if (window.__audioTranscriptionOverlayApi) {
     }
 
     function onMessage(request, sender, sendResponse) {
-      if (!request || !request.type) return false;
+      if (!request) return false;
       try {
         if (request.type === "resetSession") { 
           resetSessionView(request.isSubtitleMode, request.isStandalone); 
@@ -1495,6 +1485,16 @@ if (window.__audioTranscriptionOverlayApi) {
           return true;
         }
 
+        if (request.action === "clearSubtitleHistory") {
+          if (isSubtitleMode) {
+            subtitleOriginalHistory = [];
+            subtitleTranslatedHistory = [];
+            if (!isStandaloneHidden) renderText();
+          }
+          sendResponse({ success: true });
+          return true;
+        }
+        
         if (request.type === "clearWhisperBuffers") {
           segments = [];
           previousSegments = [];
@@ -1586,14 +1586,14 @@ if (window.__audioTranscriptionOverlayApi) {
           video.dataset.wlSeekAttached = 'true';
           
           let lastTime = video.currentTime || 0;
-
+          
           video.addEventListener('timeupdate', () => {
              if (!video.seeking) lastTime = video.currentTime;
           });
 
           video.addEventListener('seeked', () => {
             if (isSubtitleMode) return; 
-
+            
             if (Math.abs(video.currentTime - lastTime) > 2.5) {
                 console.log("[WhisperLive] Salto de tiempo del usuario detectado. Resincronizando buffers.");
                 chrome.runtime.sendMessage({ action: "whisperSeeked" });

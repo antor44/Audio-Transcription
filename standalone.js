@@ -4,12 +4,6 @@
  *
  * This file is part of Audio Transcription.
  *
- * This file includes material derived in part from the upstream browser
- * extension components of collabora/WhisperLive, licensed under the MIT License.
- *
- * Upstream copyright notice:
- * Copyright (c) 2023 Vineet Suryan, Collabora Ltd.
- *
  * Audio Transcription is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -22,10 +16,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Audio Transcription. If not, see <https://www.gnu.org/licenses/>.
- *
- * Additional third-party licensing information, including the preserved MIT
- * notice for upstream WhisperLive-derived material, is provided in
- * THIRD_PARTY_NOTICES.md.
  */
 
 (function () {
@@ -1108,7 +1098,7 @@
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (!request || !request.type) return false;
+    if (!request) return false;
     try {
       if (request.type === "resetSession") { 
         resetGlobalState(request.isSubtitleMode); 
@@ -1154,6 +1144,16 @@
         renderText(); 
         applyDisplayMode(); 
         sendResponse({ success: true }); 
+        return true;
+      }
+      
+      if (request.action === "clearSubtitleHistory") {
+        if (isSubtitleMode) {
+          subtitleOriginalHistory = [];
+          subtitleTranslatedHistory = [];
+          renderText();
+        }
+        sendResponse({ success: true });
         return true;
       }
 
