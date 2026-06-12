@@ -113,7 +113,16 @@ The easiest way to install the extension is directly from the official Chrome We
 
 👉 **[Install Audio Transcription from the Chrome Web Store](https://chromewebstore.google.com/detail/audio-transcription-live/mgekiekmhamibkobnlfbphhifjkhkohh)**
 
-> **Note about Chrome installation:** Because this is a newly published extension, Google Chrome's "Enhanced Safe Browsing" might show a warning that it does not trust the extension yet. This is a standard automatic warning from Google and will disappear automatically after a few months of a clean track record. The extension is completely safe, open-source, and all audio is processed locally on your machine, even the translation if you want.
+> [!NOTE]
+> The extension is completely safe and open-source. If you want, all audio processing—including translation and TTS—can be performed locally on your machine.
+
+> [!TIP]
+> For example, you can avoid using any online service entirely by configuring WhisperLive and enabling local translation to English. For better translation quality, it is recommended to use a large model such as Large-v2 or Large-v3. You can also often obtain a decent translation by selecting a source language different from the video's original audio language.
+>
+> In subtitle mode, you can choose an existing translated subtitle track or YouTube's own automatic translation. Optionally, the TTS feature can read the subtitles in the original language.
+>
+> On Linux, Chrome's built-in TTS provides very good quality for supported languages and runs entirely locally.
+
 
 ### Option 2: Manual Installation (Developer Mode)
 If you prefer to install it manually from the source code or want to modify the extension:
