@@ -30,11 +30,55 @@
 
 window.__subtitleTtsApi = (function () {
 
-  const MIN_WORDS_PUNCT  = 8;    
-  const HARD_COMMIT      = 35;   
-  const MAX_AGE          = 30000;
-  const MAX_Q            = 4;
-  const MAX_COMMITTED    = 500;  
+  // ── Profile-based accumulation parameters ──────────────────────────────
+  // Three modes, mirroring the WhisperLive transcription profile selector:
+  //   lowlag      — commit fast; minimal buffering; may cut mid-sentence.
+  //   balanced    — wait for punctuation up to a moderate word limit (default).
+  //   fullsentence — wait for strong punctuation; max 8 s before hard flush.
+
+  function getProfileCfg(profile) {
+    switch (profile) {
+      case 'lowlag':
+        return {
+          MIN_WORDS_PUNCT : 10,
+          HARD_COMMIT     : 25,
+          MAX_AGE         : 15000,
+          MAX_Q           : 6,
+          MAX_COMMITTED   : 500,
+          T_PUNCT         : 200, 
+          T_FALLBACK      : 2000,
+          S_OVERFLOW_W    : 20,
+          S_OVERFLOW_BACK : 10,
+        };
+      case 'fullsentence':
+        return {
+          MIN_WORDS_PUNCT : 25,
+          HARD_COMMIT     : 45,
+          MAX_AGE         : 30000,
+          MAX_Q           : 3,
+          MAX_COMMITTED   : 500,
+          T_PUNCT         : 700,
+          T_FALLBACK      : 8000,
+          S_OVERFLOW_W    : 35,
+          S_OVERFLOW_BACK : 25,
+        };
+      default: // 'balanced'
+        return {
+          MIN_WORDS_PUNCT : 15,
+          HARD_COMMIT     : 35,
+          MAX_AGE         : 30000,
+          MAX_Q           : 4,
+          MAX_COMMITTED   : 500,
+          T_PUNCT         : 400,
+          T_FALLBACK      : 4000,
+          S_OVERFLOW_W    : 25,
+          S_OVERFLOW_BACK : 15,
+        };
+    }
+  }
+
+  let currentProfile = 'balanced';
+  let P = getProfileCfg(currentProfile);  // live profile config
 
   // Regex for languages without spaces (Chinese, Japanese, etc.)
   const SPACELESS_RE = /[\u3040-\u9FFF\uF900-\uFAFF\u0E00-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u1780-\u17FF]/;
@@ -80,6 +124,7 @@ window.__subtitleTtsApi = (function () {
   function onSeeked() {
     isSeeking = true;
     cueQueue = [];
+    recentTrans = [];
     isSpeaking = false;
     isTtsSpeaking = false;
     pendingWords = [];
@@ -108,7 +153,7 @@ window.__subtitleTtsApi = (function () {
   };
 
   const originalVideoVolumes = new Map();
-  const SKIP = /auto.?generat|automatically|inaccurat|turn off subtitle|keyboard shortcut|^\[[a-z\s]+\]$/i;
+  const SKIP = /auto.?generat|generad|généré|automatisch|gerado|generati|автоматически|automatically|inaccurat|turn off subtitle|desactivar|désactiver|keyboard shortcut|atajos|^\[[\p{L}\s]+\]$/iu;
 
   function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
 
@@ -116,13 +161,12 @@ window.__subtitleTtsApi = (function () {
   function cleanSubtitle(t) {
     let str = String(t || '');
     
-    // Aggressively remove hidden screen-reader text injected by YouTube
+    // Aggressively remove hidden screen-reader text injected by YouTube in multiple languages
     const uiArtifacts = [
-        /[a-záéíóúüñA-Z]+\s*\((?:generados automáticamente|auto-generated)\)/gi,
-        /haz clic.*?configuración/gi,
-        /click.*?settings/gi,
-        /turn off subtitles?/gi,
-        /keyboard shortcuts?/gi
+        /[^\(\)]+\s*\((?:auto-generated|generados automáticamente|généré automatiquement|automatisch|gerado automaticamente|generati automaticamente|автоматически|自動生成|자동 생성|自动生成)[^\)]*\)/gi,
+        /(?:haz clic|click|cliquez|klicken|fare clic|clique).*?(?:configuración|settings|paramètres|einstellungen|impostazioni|configurações)/gi,
+        /(?:turn off subtitles|desactivar subtítulos|désactiver les sous-titres|untertitel deaktivieren|desativar legendas|disattiva sottotitoli)/gi,
+        /(?:keyboard shortcuts|atajos de teclado|raccourcis clavier|tastaturkürzel|atalhos de teclado|scorciatoie da tastiera)/gi
     ];
     uiArtifacts.forEach(rx => { str = str.replace(rx, ' '); });
 
@@ -299,7 +343,18 @@ window.__subtitleTtsApi = (function () {
         lastSeenText = '';
         if (pendingWords.length > 0) {
           clearTimeout(debTimer);
-          debTimer = setTimeout(flushPending, 1200);
+          if (isTextTrackMode) {
+            // TextTrack cue just ended. It might be a natural boundary or an
+            // inter-segment gap. Soft-flush to keep unpunctuated fragments.
+            softFlushPending();
+          } else {
+            // DOM mutation mode: subtitle box briefly disappeared.
+            // Wait proportionally so the next segment can join the buffer.
+            const gapDelay = pendingWords.length >= P.MIN_WORDS_PUNCT
+              ? 1200
+              : P.T_FALLBACK;
+            debTimer = setTimeout(softFlushPending, gapDelay);
+          }
         }
       }
       return;
@@ -326,16 +381,9 @@ window.__subtitleTtsApi = (function () {
     const skipCommitted = committedPrefixLength(committedWords, allWords, false);
     const fresh = allWords.slice(skipCommitted);
 
-    if (!fresh.length) {
-      if (pendingWords.length) evaluateCommit();
-      return;
-    }
-
-    if (isTextTrackMode) {
-      pendingWords = [...pendingWords, ...fresh];
-    } else {
-      pendingWords = mergeCues(pendingWords, fresh);
-    }
+    // ALWAYS use mergeCues. YouTube autogenerated TextTracks can overlap,
+    // and mergeCues safely handles both disjointed and overlapping cues.
+    pendingWords = mergeCues(pendingWords, fresh);
 
     evaluateCommit();
   }
@@ -344,32 +392,26 @@ window.__subtitleTtsApi = (function () {
     const wc = pendingWords.length;
     if (!wc) return;
 
-    if (wc >= HARD_COMMIT) {
-      const splitPoint = Math.max(1, wc - 1);
-      const sentence   = pendingWords.slice(0, splitPoint);
-      const remainder  = pendingWords.slice(splitPoint);
-      const text = joinWords(sentence);
-      committedWords = [...committedWords, ...sentence];
-      if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
-      commitText(text);
-      pendingWords = remainder;
-      return;
-    }
+    const RE_PUNCT   = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;:\u061B\uFF1B\uFF1A,\-\u060C\u3001]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
+    const RE_STRONG   = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
+    const RE_OPEN_Q   = /^[\u00bf\u00a1]/;
 
-    const RE_STRONG = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965]["'\])}»\u201D\u2019]*$/;
-    const RE_MEDIUM = /[;:\u061B\uFF1B\uFF1A]["'\])}»\u201D\u2019]*$/;
-    const RE_WEAK   = /[,\-\u060C\u3001]["'\])}»\u201D\u2019]*$/;
-    const RE_OPEN_Q = /^[¿¡]/;
-    const RE_CONTINUATION = /^(and|but|or|so|yet|for|nor)$/i;
+    const lastWord  = pendingWords[wc - 1] || '';
+    const hasPunct  = RE_PUNCT.test(lastWord);
 
-    const isStaticMode = isTextTrackMode ||
-      pendingWords.some(w => /[.,!?;:\u3002\uFF01\uFF1F\u061F\u0964\u0965\u060C\u061B\u3001\uFF1B\uFF1A]/.test(w));
+    // isStaticMode: the subtitle line we just received already ends with
+    // punctuation (i.e. it's a complete, pre-punctuated segment like TextTrack
+    // or a static caption box). We do NOT activate it just because some earlier
+    // word in the buffer happened to contain punctuation — that caused cascading
+    // splits that left tiny 3-word fragments like "This is the".
+    const isStaticMode = isTextTrackMode || hasPunct;
 
+    // ── Internal splitting (buffer has > MIN_WORDS_PUNCT) ────────────────────
     let internalSplitIdx = -1;
-    for (let i = MIN_WORDS_PUNCT - 1; i < wc - 1; i++) {
-      if (RE_STRONG.test(pendingWords[i])) {
-        const nextWord = pendingWords[i + 1] || '';
-        if (RE_CONTINUATION.test(nextWord) && /^[a-z]/.test(nextWord)) continue;
+    for (let i = P.MIN_WORDS_PUNCT - 1; i < wc - 1; i++) {
+      if (RE_PUNCT.test(pendingWords[i])) {
+        // Any punctuation after the minimum word threshold is a valid split point.
+        // Fragments left behind are safe and will accumulate with incoming text.
         internalSplitIdx = i;
         break;
       }
@@ -380,41 +422,30 @@ window.__subtitleTtsApi = (function () {
       pendingWords   = pendingWords.slice(internalSplitIdx + 1);
       const text = joinWords(sentence);
       committedWords = [...committedWords, ...sentence];
-      if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
+      if (committedWords.length > P.MAX_COMMITTED) committedWords = committedWords.slice(-P.MAX_COMMITTED);
       commitText(text);
-      if (pendingWords.length >= MIN_WORDS_PUNCT) evaluateCommit();
+      clearTimeout(debTimer);
+      // Recursively evaluate the remaining fragment
+      evaluateCommit();
       return;
     }
 
-    const lastWord     = pendingWords[wc - 1] || '';
-    const hasStrong    = RE_STRONG.test(lastWord);
-    const hasMedium    = RE_MEDIUM.test(lastWord);
-    const hasWeak      = RE_WEAK.test(lastWord);
-
+    // ── Last-word evaluation ─────────────────────────────────────────────────
     if (isStaticMode) {
-      if (hasStrong && wc >= MIN_WORDS_PUNCT) {
-        flushPending();
-      } else if (hasStrong && wc < MIN_WORDS_PUNCT) {
+      if (hasPunct && wc >= P.MIN_WORDS_PUNCT) {
+        forceFlushPending();
+      } else if (hasPunct && wc < P.MIN_WORDS_PUNCT) {
+        // Short line with punctuation. Give it time to accumulate more text
+        // according to the profile's fallback time instead of rushing a commit.
         clearTimeout(debTimer);
-        debTimer = setTimeout(flushPending, 800);
-      } else if (hasMedium && wc >= 12) {
-        flushPending();
-      } else if (hasWeak && wc >= 18) {
-        flushPending();
-      } else if (wc >= 22) {
+        debTimer = setTimeout(forceFlushPending, P.T_FALLBACK);
+      } else if (wc >= P.S_OVERFLOW_W) {
+        // Buffer too long, scan backwards for punctuation.
         let splitIdx = -1;
-        for (let i = wc - 2; i >= 10; i--) {
-          if (RE_MEDIUM.test(pendingWords[i]) || RE_OPEN_Q.test(pendingWords[i + 1] || '')) {
+        for (let i = wc - 2; i >= P.S_OVERFLOW_BACK; i--) {
+          if (RE_PUNCT.test(pendingWords[i]) || RE_OPEN_Q.test(pendingWords[i + 1] || '')) {
             splitIdx = i;
             break;
-          }
-        }
-        if (splitIdx === -1) {
-          for (let i = wc - 2; i >= 14; i--) {
-            if (RE_WEAK.test(pendingWords[i])) {
-              splitIdx = i;
-              break;
-            }
           }
         }
         if (splitIdx !== -1) {
@@ -422,8 +453,11 @@ window.__subtitleTtsApi = (function () {
           pendingWords   = pendingWords.slice(splitIdx + 1);
           const text = joinWords(sentence);
           committedWords = [...committedWords, ...sentence];
-          if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
+          if (committedWords.length > P.MAX_COMMITTED) committedWords = committedWords.slice(-P.MAX_COMMITTED);
           commitText(text);
+          clearTimeout(debTimer);
+          evaluateCommit();
+          return;
         } else {
           clearTimeout(debTimer);
         }
@@ -431,23 +465,59 @@ window.__subtitleTtsApi = (function () {
         clearTimeout(debTimer);
       }
     } else {
-      if (hasStrong && wc >= MIN_WORDS_PUNCT) {
+      // Progressive / live stream mode — use debounce timers.
+      if (hasPunct && wc >= P.MIN_WORDS_PUNCT) {
         clearTimeout(debTimer);
-        debTimer = setTimeout(flushPending, 400);
-      } else if (hasMedium && wc >= MIN_WORDS_PUNCT) {
-        clearTimeout(debTimer);
-        debTimer = setTimeout(flushPending, 1000);
-      } else if (hasWeak && wc >= 15) {
-        clearTimeout(debTimer);
-        debTimer = setTimeout(flushPending, 1500);
+        debTimer = setTimeout(forceFlushPending, P.T_PUNCT);
       } else {
         clearTimeout(debTimer);
-        debTimer = setTimeout(flushPending, 4000);
+        // Soft flush keeps trailing unpunctuated fragments safe in the buffer
+        debTimer = setTimeout(softFlushPending, P.T_FALLBACK);
       }
+    }
+
+    // ── Hard Commit ──────────────────────────────────────────────────────────
+    if (pendingWords.length >= P.HARD_COMMIT) {
+      forceFlushPending();
     }
   }
 
-  function flushPending() {
+  function softFlushPending() {
+    clearTimeout(debTimer);
+    if (!pendingWords.length) return;
+
+    const wc = pendingWords.length;
+    const RE_PUNCT = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;:\u061B\uFF1B\uFF1A,\-\u060C\u3001]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
+    
+    // If the last word has punctuation, it's a complete thought anyway.
+    if (RE_PUNCT.test(pendingWords[wc - 1])) {
+      forceFlushPending();
+      return;
+    }
+
+    // Otherwise, find the last punctuation mark and only commit up to there.
+    let splitIdx = -1;
+    for (let i = wc - 2; i >= 0; i--) {
+      if (RE_PUNCT.test(pendingWords[i])) {
+        splitIdx = i;
+        break;
+      }
+    }
+
+    if (splitIdx !== -1) {
+      const sentence = pendingWords.slice(0, splitIdx + 1);
+      pendingWords   = pendingWords.slice(splitIdx + 1);
+      const text = joinWords(sentence);
+      committedWords = [...committedWords, ...sentence];
+      if (committedWords.length > P.MAX_COMMITTED) committedWords = committedWords.slice(-P.MAX_COMMITTED);
+      commitText(text);
+    }
+    // If there is no punctuation anywhere, we leave the fragment in pendingWords.
+    // It will be completed when the next subtitle segment arrives, or forced out
+    // if it eventually reaches HARD_COMMIT.
+  }
+
+  function forceFlushPending() {
     clearTimeout(debTimer);
     if (!pendingWords.length) return;
     const text = joinWords(pendingWords);
@@ -455,7 +525,7 @@ window.__subtitleTtsApi = (function () {
     lastSeenText = '';
 
     committedWords = [...committedWords, ...splitWords(text)];
-    if (committedWords.length > MAX_COMMITTED) committedWords = committedWords.slice(-MAX_COMMITTED);
+    if (committedWords.length > P.MAX_COMMITTED) committedWords = committedWords.slice(-P.MAX_COMMITTED);
 
     commitText(text);
   }
@@ -590,8 +660,8 @@ window.__subtitleTtsApi = (function () {
   async function processQueue() {
     if (stopped || isSpeaking || !cueQueue.length) return;
     const now = Date.now();
-    while (cueQueue.length && (now - cueQueue[0].ts) > MAX_AGE) cueQueue.shift();
-    while (cueQueue.length > MAX_Q) cueQueue.shift();
+    while (cueQueue.length && (now - cueQueue[0].ts) > P.MAX_AGE) cueQueue.shift();
+    while (cueQueue.length > P.MAX_Q) cueQueue.shift();
     const item = cueQueue.shift();
     if (!item) return;
 
@@ -669,7 +739,14 @@ window.__subtitleTtsApi = (function () {
   async function init(settings) {
     resetState();
     stopped = false;
-    if (settings) cfg = { ...cfg, ...settings };
+    if (settings) {
+      cfg = { ...cfg, ...settings };
+      // Apply profile from settings
+      if (settings.subtitleTtsProfile) {
+        currentProfile = settings.subtitleTtsProfile;
+        P = getProfileCfg(currentProfile);
+      }
+    }
     videoEl = findVideo();
     if (!videoEl) return { success: false, error: 'no_video' };
     applyVideoVolume(true);
@@ -791,6 +868,10 @@ window.__subtitleTtsApi = (function () {
         s.textContent = '.ytp-caption-window-container, .caption-window { opacity: 0.01 !important; pointer-events: none !important; }';
         document.head.appendChild(s);
       } else if (!cfg.hideNativeSubtitles && existing) { existing.remove(); }
+    }
+    if (changes.subtitleTtsProfile) {
+      currentProfile = changes.subtitleTtsProfile.newValue || 'balanced';
+      P = getProfileCfg(currentProfile);
     }
   }
 

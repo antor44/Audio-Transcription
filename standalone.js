@@ -1056,11 +1056,19 @@
       }
       if (transcriptionTranslatedEl) {
         const allTrans = subtitleTranslatedHistory;
-        const fullTransText = formatText(allTrans.join(' '), currentFormatting);
-        const lines = fullTransText.split('\n').filter(Boolean);
-        const histHtml = lines.slice(0, -1).map(l => `<span style="opacity:0.55;color:#a7f3d0;font-style:italic;">${escapeHtml(l)}</span>`).join('<br>');
-        const lastHtml = lines.length ? `<span style="color:#a7f3d0;font-style:italic;font-weight:600;">${escapeHtml(lines[lines.length - 1])}</span>` : '';
-        transcriptionTranslatedEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histHtml}${histHtml && lastHtml ? '<br>' : ''}${lastHtml}</span>`;
+        let histHtml = '';
+        let lastHtml = '';
+        if (allTrans.length > 0) {
+          const histText = allTrans.slice(0, -1).join(' ');
+          if (histText) {
+            const histFormatted = formatText(histText, currentFormatting);
+            histHtml = `<span style="opacity:0.55;color:#a7f3d0;font-style:italic;">${escapeHtml(histFormatted).replace(/\n/g, '<br>')}</span><br>`;
+          }
+          const currText = allTrans[allTrans.length - 1] || '';
+          const currFormatted = formatText(currText, currentFormatting);
+          lastHtml = `<span style="color:#a7f3d0;font-style:italic;font-weight:600;">${escapeHtml(currFormatted).replace(/\n/g, '<br>')}</span>`;
+        }
+        transcriptionTranslatedEl.innerHTML = `<span style="${TEXT_BLOCK_STYLE}">${histHtml}${lastHtml}</span>`;
         transcriptionTranslatedEl.scrollTop = transcriptionTranslatedEl.scrollHeight;
       }
       return;
@@ -1160,6 +1168,10 @@
       if (request.type === "clearWhisperBuffers") {
         segments = [];
         previousSegments = [];
+        historyChunks = [];
+        historyChunksRaw = [];
+        translatedChunks = [];
+        dedupTail = [];
         pendingStableText = "";
         lastReceivedTime = Date.now();
         windowStartTime = Date.now();

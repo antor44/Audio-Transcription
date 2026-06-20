@@ -194,6 +194,15 @@
         </div>
 
         <div class="input-container" style="margin-top:12px;">
+          <label for="subtitleTtsProfile">Sentence Build Mode</label>
+          <select id="subtitleTtsProfile">
+            <option value="fullsentence">Full Sentence — Natural pacing, waits for punctuation</option>
+            <option value="balanced" selected>Balanced — Recommended for most content</option>
+            <option value="lowlag">Low Lag — Fastest output, may cut mid-sentence</option>
+          </select>
+        </div>
+
+        <div class="input-container">
           <label for="stts_displayModeDropdown">Display Mode</label>
           <select id="stts_displayModeDropdown">
             <option value="original">Original Only</option>

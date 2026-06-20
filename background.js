@@ -479,7 +479,7 @@ async function startSubtitleTtsInternal(tabId) {
   subtitleTabId = tabId;
   setSubtitleTtsState(true);
 
-  const settings = await getStorage(["targetLanguage", "ttsSpeed", "subtitlePlaybackControl", "subtitleSlowdownRate", "useStandalone", "hideNativeSubtitles", "subtitleVideoVolume", "enableTts", "enableGeminiTranslation", "sttsSelectedLanguage"]);
+  const settings = await getStorage(["targetLanguage", "ttsSpeed", "subtitlePlaybackControl", "subtitleSlowdownRate", "useStandalone", "hideNativeSubtitles", "subtitleVideoVolume", "enableTts", "enableGeminiTranslation", "sttsSelectedLanguage", "subtitleTtsProfile"]);
 
   if (!settings.useStandalone) {
     const contentInjected = await executeScriptInTab(tabId, "content.js");
@@ -509,7 +509,8 @@ async function startSubtitleTtsInternal(tabId) {
       targetLanguage: settings.targetLanguage || "en", sttsSelectedLanguage: settings.sttsSelectedLanguage || "",
       ttsSpeed: parseFloat(settings.ttsSpeed) || 1.0, playbackControl: settings.subtitlePlaybackControl || "pause",
       slowdownRate: parseFloat(settings.subtitleSlowdownRate) || 0.8, hideNativeSubtitles: settings.hideNativeSubtitles !== false,
-      videoVolume: parseFloat(settings.subtitleVideoVolume || "1.0")
+      videoVolume: parseFloat(settings.subtitleVideoVolume || "1.0"),
+      subtitleTtsProfile: settings.subtitleTtsProfile || "balanced"
     }
   };
 
@@ -564,6 +565,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // Broadcast to content.js and standalone.js to clear visual history (Ads/Seeks)
     if (message.action === "clearSubtitleHistory") {
+      resetTranslationContext();
       getStorage(["currentTabId", "standaloneTabId"]).then(res => {
         if (res.currentTabId) sendMessageToTab(res.currentTabId, message);
         if (res.standaloneTabId) sendMessageToTab(res.standaloneTabId, message);
@@ -573,6 +575,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === "whisperSeeked") {
+      resetTranslationContext();
       getStorage(["currentTabId", "standaloneTabId"]).then(res => {
         if (res.currentTabId) sendMessageToTab(res.currentTabId, { type: "clearWhisperBuffers" });
         if (res.standaloneTabId) sendMessageToTab(res.standaloneTabId, { type: "clearWhisperBuffers" });

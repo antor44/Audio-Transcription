@@ -73,6 +73,7 @@ const DEFAULTS = {
   enableGeminiTranslation:false,
   subtitlePlaybackControl:'pause', subtitleSlowdownRate:'0.8',
   subtitleVideoVolume:'1.0',
+  subtitleTtsProfile:'balanced',
   activeTab:'subtitle'
 };
 
@@ -157,6 +158,7 @@ function initElements() {
   el.subtitleTtsStatus      = $('subtitleTtsStatus');
   el.stts_languageDropdown  = $('stts_languageDropdown');
   el.subtitlePlaybackControl= $('subtitlePlaybackControl');
+  el.subtitleTtsProfile     = $('subtitleTtsProfile');
   el.subtitleSlowdownRate   = $('subtitleSlowdownRate');
   el.subtitleSlowdownRateValue=$('subtitleSlowdownRateValue');
   el.subtitleSlowdownRow    = $('subtitleSlowdownRow');
@@ -253,6 +255,7 @@ function collectSettings(){
     ttsSpeed: normalizeSpeed(el.ttsSpeed?.value),
     enableGeminiTranslation: !!el.enableGeminiTranslationCheckbox?.checked,
     subtitlePlaybackControl: el.subtitlePlaybackControl?.value||DEFAULTS.subtitlePlaybackControl,
+    subtitleTtsProfile: el.subtitleTtsProfile?.value||DEFAULTS.subtitleTtsProfile,
     subtitleSlowdownRate: normalizeRate(el.subtitleSlowdownRate?.value,.3,.9,DEFAULTS.subtitleSlowdownRate),
     subtitleVideoVolume: String(parseFloat(el.subtitleVideoVolume?.value??'1').toFixed(2)),
     hideNativeSubtitles: el.hideNativeSubtitles ? !!el.hideNativeSubtitles.checked : true
@@ -274,6 +277,7 @@ async function saveSettings(){
     enableTts:s.enableTts, ttsSpeed:s.ttsSpeed,
     enableGeminiTranslation:s.enableGeminiTranslation,
     subtitlePlaybackControl:s.subtitlePlaybackControl,
+    subtitleTtsProfile:s.subtitleTtsProfile,
     subtitleSlowdownRate:s.subtitleSlowdownRate,
     subtitleVideoVolume:s.subtitleVideoVolume,
     hideNativeSubtitles:s.hideNativeSubtitles
@@ -320,6 +324,7 @@ function applySettingsToUI(s){
   if(el.wl_enableGeminiTranslationCheckbox) el.wl_enableGeminiTranslationCheckbox.checked=ge;
 
   if(el.subtitlePlaybackControl) el.subtitlePlaybackControl.value=s.subtitlePlaybackControl??DEFAULTS.subtitlePlaybackControl;
+  if(el.subtitleTtsProfile) el.subtitleTtsProfile.value=s.subtitleTtsProfile??DEFAULTS.subtitleTtsProfile;
   if(el.subtitleSlowdownRate) el.subtitleSlowdownRate.value=normalizeRate(s.subtitleSlowdownRate??DEFAULTS.subtitleSlowdownRate,.3,.9,DEFAULTS.subtitleSlowdownRate);
   const vol=parseFloat(s.subtitleVideoVolume??DEFAULTS.subtitleVideoVolume).toFixed(2);
   if(el.subtitleVideoVolume) el.subtitleVideoVolume.value=vol;
@@ -392,7 +397,7 @@ function bindAutosave(){
     el.ipAddress, el.port, el.languageDropdown, el.stts_languageDropdown, el.taskDropdown,
     el.modelSizeDropdown, el.textFormattingDropdown, el.transcriptionProfileDropdown,
     el.geminiModelDropdown, el.targetLanguageDropdown, el.displayModeDropdown,
-    el.subtitlePlaybackControl, el.hideNativeSubtitles,
+    el.subtitlePlaybackControl, el.subtitleTtsProfile, el.hideNativeSubtitles,
     el.wl_enableTtsCheckbox, el.wl_enableGeminiTranslationCheckbox,
     el.wl_geminiModelDropdown, el.wl_targetLanguageDropdown,
     el.stts_displayModeDropdown, el.stts_useStandaloneCheckbox
