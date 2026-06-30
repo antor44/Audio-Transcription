@@ -1,4 +1,4 @@
-# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.1.9)
+# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.2.0)
 
 A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-time interpreter. It captures any audio playing in a tab (transcribing it via a local Whisper AI server) or reads existing video subtitles, translates them live, and reads the results back to you via Text-to-Speech (TTS) on the fly. 
 
@@ -435,6 +435,14 @@ Replace `~/python-environments/whisper-live/bin/activate` with your own path if 
 ---
 
 ## FAQ
+
+**Q: Why does the TTS sometimes have a slight delay, or why do I occasionally experience bugs with certain languages or websites?**
+
+**A:** This extension is designed with a highly ambitious goal: to be a **universal, real-time interpreter**. It attempts to support *every* language, *every* website, *every* media format, and *every* transcription method (whether native closed captions or live AI generation from scratch). 
+
+Because of this universal approach, edge cases and minor bugs are sometimes inevitable. Different languages have entirely different grammatical structures (e.g., spaceless CJK scripts, right-to-left Arabic/Hebrew), and video players inject hidden control characters or format subtitles in unpredictable ways. 
+
+Additionally, please note that **this extension does not pre-download subtitle files** (like `.vtt` or `.srt`), even if they are available on the video. To ensure it works universally on *any* live stream or dynamic content, it processes text strictly on the fly, frame by frame, as it appears on your screen or as the WhisperLive server generates it. Because the engine must wait for a complete logical sentence to form before sending it to the translation API and the TTS engine, there will always be a slight, inherent lag (latency) before you hear the audio.
 
 **Q: What is a localhost server? Could I use the extension from the internet to connect to my server?**
 
