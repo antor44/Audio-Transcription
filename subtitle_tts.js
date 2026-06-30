@@ -40,7 +40,7 @@ window.__subtitleTtsApi = (function () {
     switch (profile) {
       case 'lowlag':
         return {
-          MIN_WORDS_PUNCT : 10,
+          MIN_WORDS_PUNCT : 6,
           HARD_COMMIT     : 25,
           MAX_AGE         : 15000,
           MAX_Q           : 6,
@@ -49,10 +49,11 @@ window.__subtitleTtsApi = (function () {
           T_FALLBACK      : 2000,
           S_OVERFLOW_W    : 20,
           S_OVERFLOW_BACK : 10,
+          MIN_FRAG        : 2, 
         };
       case 'fullsentence':
         return {
-          MIN_WORDS_PUNCT : 25,
+          MIN_WORDS_PUNCT : 10,
           HARD_COMMIT     : 45,
           MAX_AGE         : 30000,
           MAX_Q           : 3,
@@ -61,10 +62,11 @@ window.__subtitleTtsApi = (function () {
           T_FALLBACK      : 8000,
           S_OVERFLOW_W    : 35,
           S_OVERFLOW_BACK : 25,
+          MIN_FRAG        : 6, 
         };
       default: // 'balanced'
         return {
-          MIN_WORDS_PUNCT : 15,
+          MIN_WORDS_PUNCT : 8,
           HARD_COMMIT     : 35,
           MAX_AGE         : 30000,
           MAX_Q           : 4,
@@ -73,6 +75,7 @@ window.__subtitleTtsApi = (function () {
           T_FALLBACK      : 4000,
           S_OVERFLOW_W    : 25,
           S_OVERFLOW_BACK : 15,
+          MIN_FRAG        : 4, 
         };
     }
   }
@@ -107,11 +110,12 @@ window.__subtitleTtsApi = (function () {
   let cueQueue = [], recentTrans = [];
   let ttsId = null, stopped = false;
   let isTextTrackMode = false;
-
+  
   let pendingWords   = [];
   let committedWords = [];
   let lastSeenText   = '';
   let debTimer       = null;
+  let silenceTimer   = null; // Independent safety net timer for long pauses
   let isProgressiveMode = false;
 
   let isSeeking = false;
@@ -131,6 +135,7 @@ window.__subtitleTtsApi = (function () {
     committedWords = [];
     lastSeenText = '';
     clearTimeout(debTimer);
+    clearTimeout(silenceTimer);
     clearTimeout(ttsId);
 
     try { 
@@ -343,6 +348,11 @@ window.__subtitleTtsApi = (function () {
         lastSeenText = '';
         if (pendingWords.length > 0) {
           clearTimeout(debTimer);
+          clearTimeout(silenceTimer);
+          
+          // Safety net: if the screen stays blank for 2500ms, force a hard commit.
+          silenceTimer = setTimeout(forceFlushPending, 2500);
+
           if (isTextTrackMode) {
             // TextTrack cue just ended. It might be a natural boundary or an
             // inter-segment gap. Soft-flush to keep unpunctuated fragments.
@@ -365,6 +375,7 @@ window.__subtitleTtsApi = (function () {
     lastSeenText = clean;
 
     clearTimeout(debTimer);
+    clearTimeout(silenceTimer);
 
     const allWords = splitWords(clean);
 
@@ -392,7 +403,7 @@ window.__subtitleTtsApi = (function () {
     const wc = pendingWords.length;
     if (!wc) return;
 
-    const RE_PUNCT   = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;:\u061B\uFF1B\uFF1A,\-\u060C\u3001]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
+    const RE_PUNCT = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;\u061B\uFF1B\u0964\u0965]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
     const RE_STRONG   = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
     const RE_OPEN_Q   = /^[\u00bf\u00a1]/;
 
@@ -410,8 +421,7 @@ window.__subtitleTtsApi = (function () {
     let internalSplitIdx = -1;
     for (let i = P.MIN_WORDS_PUNCT - 1; i < wc - 1; i++) {
       if (RE_PUNCT.test(pendingWords[i])) {
-        // Any punctuation after the minimum word threshold is a valid split point.
-        // Fragments left behind are safe and will accumulate with incoming text.
+        if (wc - 1 - i < P.MIN_FRAG) continue;
         internalSplitIdx = i;
         break;
       }
@@ -438,12 +448,12 @@ window.__subtitleTtsApi = (function () {
         // Short line with punctuation. Give it time to accumulate more text
         // according to the profile's fallback time instead of rushing a commit.
         clearTimeout(debTimer);
-        debTimer = setTimeout(forceFlushPending, P.T_FALLBACK);
+        debTimer = setTimeout(softFlushPending, P.T_FALLBACK);
       } else if (wc >= P.S_OVERFLOW_W) {
-        // Buffer too long, scan backwards for punctuation.
         let splitIdx = -1;
         for (let i = wc - 2; i >= P.S_OVERFLOW_BACK; i--) {
           if (RE_PUNCT.test(pendingWords[i]) || RE_OPEN_Q.test(pendingWords[i + 1] || '')) {
+            if (wc - 1 - i < P.MIN_FRAG) continue;
             splitIdx = i;
             break;
           }
@@ -487,15 +497,14 @@ window.__subtitleTtsApi = (function () {
     if (!pendingWords.length) return;
 
     const wc = pendingWords.length;
-    const RE_PUNCT = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;:\u061B\uFF1B\uFF1A,\-\u060C\u3001]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
+    const RE_PUNCT = /[.!?\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;\u061B\uFF1B\u0964\u0965]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
     
     // If the last word has punctuation, it's a complete thought anyway.
     if (RE_PUNCT.test(pendingWords[wc - 1])) {
-      forceFlushPending();
+      if (wc >= P.MIN_WORDS_PUNCT) forceFlushPending();
       return;
     }
 
-    // Otherwise, find the last punctuation mark and only commit up to there.
     let splitIdx = -1;
     for (let i = wc - 2; i >= 0; i--) {
       if (RE_PUNCT.test(pendingWords[i])) {
@@ -505,6 +514,7 @@ window.__subtitleTtsApi = (function () {
     }
 
     if (splitIdx !== -1) {
+      if (pendingWords.length - 1 - splitIdx < P.MIN_FRAG) return;
       const sentence = pendingWords.slice(0, splitIdx + 1);
       pendingWords   = pendingWords.slice(splitIdx + 1);
       const text = joinWords(sentence);
@@ -519,6 +529,7 @@ window.__subtitleTtsApi = (function () {
 
   function forceFlushPending() {
     clearTimeout(debTimer);
+    clearTimeout(silenceTimer);
     if (!pendingWords.length) return;
     const text = joinWords(pendingWords);
     pendingWords = [];
@@ -717,11 +728,13 @@ window.__subtitleTtsApi = (function () {
   }
 
   function resetState() {
-    clearTimeout(debTimer); clearTimeout(ttsId);
+    clearTimeout(debTimer); 
+    clearTimeout(silenceTimer); 
+    clearTimeout(ttsId);
     isSpeaking = false; isTtsSpeaking = false;
     pendingWords = []; committedWords = []; lastSeenText = '';
     cueQueue = []; recentTrans = [];
-    debTimer = null; ttsId = null;
+    debTimer = null; silenceTimer = null; ttsId = null;
     isTextTrackMode = false;
     isProgressiveMode = false;
   }

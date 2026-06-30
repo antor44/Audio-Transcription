@@ -718,7 +718,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.set({ [STARTUP_FLAG_KEY]: true });
+  chrome.storage.local.set({ 
+    [STARTUP_FLAG_KEY]: true,
+    capturingState: { isCapturing: false },
+    isCapturing: false,
+    isSubtitleTtsActive: false
+  });
   setTimeout(() => { chrome.storage.local.remove(STARTUP_FLAG_KEY); }, 10000);
 });
 
