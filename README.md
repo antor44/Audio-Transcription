@@ -448,7 +448,25 @@ Because of this universal approach, edge cases and minor bugs are sometimes inev
 
 Additionally, please note that **this extension does not pre-download subtitle files** (like `.vtt` or `.srt`), even if they are available on the video. To ensure it works universally on *any* live stream or dynamic content, it processes text strictly on the fly, frame by frame, as it appears on your screen or as the WhisperLive server generates it. Because the engine must wait for a complete logical sentence to form before sending it to the translation API and the TTS engine, there will always be a slight, inherent lag (latency) before you hear the audio.
 
-**Q: What is a localhost server? Could I use the extension from the internet to connect to my server? (WhisperLive Mode)**
+**Q: What transcription quality can I expect on a low-end CPU? (WhisperLive mode)**
+
+**A:** WhisperLive is based on `faster-whisper`, an optimized implementation of OpenAI's Whisper. Transcription quality depends mainly on the model and hardware you run. For English, you can get very good results on audio and video streams even on older or low-end PCs, including systems around 10 years old such as Intel Haswell. Models like `base.en` and `small.en` usually work very well for English. For other major languages, small models are typically less accurate, and minority languages may perform poorly. In those cases, you will need either a stronger CPU or a supported GPU.
+
+Another option is to fine-tune a model to improve transcription for a non-English language.
+
+**Q: How much data is needed to fine-tune a model?**
+
+**A:** Fine-tuning a Whisper model can be harder and more expensive than expected, and the amount of data required depends on the target language and use case. Some users get good results with a relatively small dataset, while others see little or no improvement. Results depend on how well Whisper already supports the language, how similar it is to other languages it knows, and the quality of the training data. In general, more high-quality data is better. Ideally, this means thousands of hours of short audio clips with accurate transcriptions.
+
+You may be able to fine-tune with free datasets such as Common Voice. You can find the latest version of the Common Voice dataset on the [Mozilla Foundation](https://commonvoice.mozilla.org) page. Keep in mind that OpenAI already used Common Voice data for validation during training, so some languages or datasets may not improve Whisper as much as expected. Even so, languages such as Catalan, Esperanto, and Basque have a significant amount of data in Common Voice, while some major languages such as Spanish have a surprisingly weak dataset. If your goal is a specialized use case, you may need substantial effort to collect enough high-quality data, even if the dataset is much smaller than for general language training. This is especially true when improving technical vocabulary, slang, or a regional accent in a language that is already reasonably well supported.
+
+A good example is Hindi: it was not especially well supported by Whisper at first, but after sufficient fine-tuning it now comes much closer to English in accuracy and efficiency. In practice, that means much better transcription even with the smallest models on low-powered processors or mobile devices. For more information, see the Collabora article: [https://www.collabora.com/news-and-blog/news-and-events/breaking-language-barriers-20-moving-closer-production-ready-hindi-asr.html](https://www.collabora.com/news-and-blog/news-and-events/breaking-language-barriers-20-moving-closer-production-ready-hindi-asr.html)
+
+The Hindi fine-tuned model was trained using a relatively accessible consumer GPU, specifically an Nvidia RTX 4090. That suggests the most important factors are the training data and how it is processed, rather than raw training power alone.
+
+Once you have a fine-tuned model, you can use it in a WhisperLive server by adding the model path to the server startup arguments.
+
+**Q: What is a localhost server? Could I use the extension from the internet to connect to my server?**
 
 **A:** A localhost server is one running on your own PC. The Chrome extension uses one port to communicate with this server, which transcribes the audio played on a webpage. Alternatively, the server can transcribe multiple audio streams from different web browsers running on your PC simultaneously.
 
@@ -749,10 +767,6 @@ Or pass flags at runtime:
 Keep in mind that modern computers are always connected to the internet in some capacity. The WhisperLive server operates like any standard network service, listening on a specific IP address and port. Simply running this type of server locally does not inherently add significant insecurity to your system.
 
 If you choose to expose the server to the outside world—which requires extra manual configuration, such as allowing the port through your firewall and setting up port forwarding on your router—anyone on the internet could theoretically connect to it. In that scenario, users would only have access to the specific transcription service provided by the program, except in the rare event of unknown bugs or security vulnerabilities within the software itself.
-
-**Q: What quality of transcription can I expect when using only a low-level processor? (WhisperLive Mode)**
-
-**A**: This Chrome extension program is based on WhisperLive, which is based on `faster-whisper`, a highly optimized implementation of OpenAI's Whisper AI. The performance of the transcription largely depends on this software. For English, you can expect very good transcriptions of video or audio streams even on low-end or older PCs, including those that are at least 10 years old (Intel Haswell). You can easily configure the application with models such as `small.en` or `base.en`, which offer excellent transcriptions for English. However, transcriptions of other major languages are not as good with small models, and minority languages do not perform well at all. For these, you will need a better CPU or a supported GPU.
 
 **Q: Some transcribed texts are difficult to read because words keep changing, and some phrases disappear or appear to be cut off. Why does this happen? (WhisperLive Mode)**
 
