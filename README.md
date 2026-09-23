@@ -9,7 +9,7 @@ Designed with privacy and efficiency in mind, it is optimized to run smoothly on
 ### 1. Prepare the Server (If needed)
 Ensure that your local [WhisperLive](https://github.com/collabora/WhisperLive) server is running. 
 > [!NOTE]
-> The local server is **ONLY required** if you intend to use the **WhisperLive** tab for live audio transcription. The **Subtitle TTS** tab works completely out-of-the-box without any server.
+> The local server is **ONLY required** if you intend to use the **WhisperLive** button for live audio transcription. The **Subtitle TTS** button works completely out-of-the-box without any server.
 
 ### 2. Play Media
 Play any audio or video on a webpage. (If using the Subtitle TTS mode, ensure the video's native subtitles/CC are enabled).
@@ -25,11 +25,11 @@ Play any audio or video on a webpage. (If using the Subtitle TTS mode, ensure th
 > **A Note on Language Auto-Detection:** The extension performs its own **language auto-detection** on the subtitles, since many video players do not correctly report the language of the subtitle track. This detection process can occasionally lead to initial errors, such as selecting the wrong TTS voice for the first few sentences or causing translation inaccuracies. In rare cases, this initial mismatch can cause the process to stall. If this occurs, it would also be better to choose the language in the  **Audio Language menu**, selecting the source language of the subtitles (not the audio). The most reliable solution is to **reload the video page and restart the extension**. 
 
 ### 3. Open the Extension
-Click the extension icon in your browser toolbar to open the options popup. You will notice the UI is divided into two main tabs:
+Click the extension icon in your browser toolbar to open the options popup. At the top of the popup, you will find two buttons:
 
 ---
 
-### 🎬 TAB 1: Subtitle TTS Mode (No Server Required)
+### 🎬 BUTTON 1: Subtitle TTS Mode (No Server Required)
 This mode reads video subtitles aloud and translates them on the fly. It works with YouTube, Twitch (CC), and any HTML5 video that provides subtitle tracks.
 
 - **Hide Original YouTube Subtitles:** Automatically hides the native captions on the video player so they don't overlap with the extension's UI.
@@ -49,7 +49,7 @@ This mode reads video subtitles aloud and translates them on the fly. It works w
 
 ---
 
-### 📡 TAB 2: WhisperLive Mode (Requires Local Server)
+### 📡 BUTTON 2: WhisperLive Mode (Requires Local Server)
 This mode captures the raw audio from the tab and transcribes it from scratch using OpenAI's Whisper AI.
 
 - **Server Connection:** Enter a custom server IP address and port (default is `localhost` and `9090`). Click **Reset Default** to revert to local settings.
@@ -71,7 +71,7 @@ This mode captures the raw audio from the tab and transcribes it from scratch us
 ---
 
 ### 🌐 AI Translation (Shared Settings)
-Both tabs support real-time translation using advanced AI models:
+Both buttons support real-time translation using advanced AI models:
 
 - **Enable Translation:** Check this to activate real-time translation.
 - **Gemini API Key:** If you intend to use a Gemini model, paste your Google Gemini API key here (you can get one for free from Google AI Studio).
@@ -100,7 +100,7 @@ Both tabs support real-time translation using advanced AI models:
 >   - *Chromium* has no built-in engine. It will only work if a TTS engine extension (like Piper) is installed; otherwise, no audio will be produced.
 
 ### Start Processing
-Click **Start Subtitle TTS** (on Tab 1) or **Start Capture** (on Tab 2) to begin. You can monitor active settings and connection status in the real-time status bar at the top of the transcription window.
+Click **Start Subtitle TTS** (on button 1) or **Start Capture** (on button 2) to begin. You can monitor active settings and connection status in the real-time status bar at the top of the transcription window.
 
 ### Window Customization & History
 The transcription windows (both in-page overlay and standalone) give you full control:
