@@ -37,6 +37,7 @@ let translatedContextWindow = [];
 let recentOriginalFragments = [];
 
 let subtitleTabId = null;
+let activeSubtitleUtteranceId = 0;
 
 const MAX_CONTEXT_SIZE = 2;
 const MAX_RECENT_ORIGINALS = 20;
@@ -275,6 +276,9 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
   }
 
   if (!translated) return { text: "", geminiError };
+  if (shownTail && translated) {
+    translated = trimTranslatedPrefixOverlap(shownTail, translated);
+  }
 
   let contextEntry;
   if (shownTail) {
@@ -313,7 +317,7 @@ function speakText(text, lang) {
   const clean = normalizeText(text);
   if (!clean) return;
 
-  const SENTENCE_END_RE_BG = /[.!?\u2026\u3002\uFF01\uFF1F\u3001\u061F\u060C\u061B\u0964\u0965\u104A\u104B\u17D4\u1362\u0589]/;
+  const SENTENCE_END_RE_BG = /[.!?:\u2026\u3002\uFF01\uFF1F\u3001\u061F\u060C\u061B\u0964\u0965\u104A\u104B\u17D4\u1362\u0589]/;
   if (ttsBuffer && SENTENCE_END_RE_BG.test(ttsBuffer)) flushTtsBuffer();
   if (ttsBuffer && ttsBufferLang && lang && ttsBufferLang !== lang) flushTtsBuffer();
 
@@ -476,6 +480,7 @@ async function startSubtitleTtsInternal(tabId) {
   const currentState = await getStorageValue("capturingState");
   if (currentState?.isCapturing) { await stopCaptureInternal(); await delay(250); }
 
+  resetTranslationContext();
   subtitleTabId = tabId;
   setSubtitleTtsState(true);
 
@@ -530,6 +535,7 @@ async function startSubtitleTtsInternal(tabId) {
 }
 
 async function stopSubtitleTtsInternal() {
+  resetTranslationContext();
   const tabId = subtitleTabId || await getStorageValue("subtitleSourceTabId");
   try { chrome.tts.stop(); } catch (e) {}
 
@@ -562,8 +568,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (e) { sendResponse({ language: "" }); }
       return true;
     }
-    
-    // Broadcast to content.js and standalone.js to clear visual history (Ads/Seeks)
+
     if (message.action === "clearSubtitleHistory") {
       resetTranslationContext();
       getStorage(["currentTabId", "standaloneTabId"]).then(res => {
@@ -607,6 +612,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.action === "resetTranslationContext") { resetTranslationContext(); sendResponse({ success: true }); return false; }
     if (message.action === "stopTts") {
+      activeSubtitleUtteranceId++;
       if (message.isSeek) { isSeekInterrupt = true; setTimeout(() => { isSeekInterrupt = false; }, 1000); }
       if (ttsFlushTimer) { clearTimeout(ttsFlushTimer); ttsFlushTimer = null; }
       ttsBuffer = ""; ttsBufferLang = "";
@@ -614,10 +620,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true }); return false;
     }
     if (message.action === "pageUnloading") { sendResponse({ success: true }); return false; }
+    
     if (message.type === "subtitle_display") {
-      getStorage(["currentTabId"]).then(res => { if (res.currentTabId) sendMessageToTab(res.currentTabId, message).catch(() => {}); });
+      getStorage(["currentTabId", "standaloneTabId"]).then(res => {
+        const dest = res.currentTabId || sender.tab?.id || subtitleTabId;
+        if (dest) sendMessageToTab(dest, message).catch(() => {});
+        if (res.standaloneTabId && res.standaloneTabId !== dest) {
+          sendMessageToTab(res.standaloneTabId, message).catch(() => {});
+        }
+      });
       sendResponse({ success: true }); return true;
     }
+    
     if (message.action === "speakOriginalText") {
       getStorage(["enableTts", "selectedTask", "selectedLanguage"]).then((res) => {
         if (!res.enableTts) { sendResponse({ success: true }); return; }
@@ -632,15 +646,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "subtitleSpeak") {
       const text = normalizeText(message.text); const lang = message.lang || "";
       const rate = Number.parseFloat(message.ttsSpeed) || 1.0; const fromTabId = sender.tab?.id || subtitleTabId;
-      if (!text) { if (fromTabId) sendMessageToTab(fromTabId, { type: "SUBTITLE_TTS_DONE" }); sendResponse({ success: true }); return false; }
+      const utteranceId = message.utteranceId;
+      activeSubtitleUtteranceId++;
+      const currentUtteranceId = activeSubtitleUtteranceId;
+
+      if (!text) { if (fromTabId) sendMessageToTab(fromTabId, { type: "SUBTITLE_TTS_DONE", utteranceId }); sendResponse({ success: true }); return false; }
       try { chrome.tts.stop(); } catch (e) {}
 
       const options = {
         rate: Number.isFinite(rate) ? Math.max(0.1, Math.min(10, rate)) : 1.0, pitch: 1.0, volume: 1.0, enqueue: false,
         onEvent: (event) => {
-          if (["end", "interrupted", "cancelled", "error"].includes(event.type)) {
-            if (isSeekInterrupt && (event.type === "interrupted" || event.type === "cancelled")) return;
-            if (fromTabId) try { chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE" }, () => { void chrome.runtime.lastError; }); } catch (e) {}
+          if (currentUtteranceId !== activeSubtitleUtteranceId) return;
+          if (event.type === "end") {
+            if (fromTabId) try { chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE", utteranceId }, () => { void chrome.runtime.lastError; }); } catch (e) {}
           }
         }
       };
@@ -648,7 +666,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const executeSpeak = () => {
         try { chrome.tts.speak(text, options); } catch (e) {
           console.error("subtitleSpeak TTS error:", e);
-          if (fromTabId) try { chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE" }, () => { void chrome.runtime.lastError; }); } catch (e2) {}
+          if (fromTabId && currentUtteranceId === activeSubtitleUtteranceId) try { chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE", utteranceId }, () => { void chrome.runtime.lastError; }); } catch (e2) {}
         }
       };
 

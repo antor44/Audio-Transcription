@@ -1041,10 +1041,17 @@ if (window.__audioTranscriptionOverlayApi) {
       clearSilenceMonitor();
       const P = activeProfile;
       silenceFlushTimer = setInterval(() => {
-        chrome.storage.local.get(["isCapturing"], (res) => {
-          const isWhisperActive = !!res?.isCapturing;
-          if (isSubtitleMode || isWhisperActive) applyVideoVolume(false);
-        });
+        if (!chrome.runtime?.id) { clearSilenceMonitor(); return; }
+        try {
+          chrome.storage.local.get(["isCapturing"], (res) => {
+            if (chrome.runtime?.lastError) return;
+            const isWhisperActive = !!res?.isCapturing;
+            if (isSubtitleMode || isWhisperActive) applyVideoVolume(false);
+          });
+        } catch(e) {
+          clearSilenceMonitor();
+          return;
+        }
         
         if (isStandaloneHidden) return;
         const now = Date.now();
