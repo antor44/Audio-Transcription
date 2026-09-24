@@ -165,8 +165,8 @@ async function translateWithGoogle(text, targetLangCode) {
       return normalizeText(result);
     } finally { clearTimeout(timer); }
   } catch (e) {
-    console.warn("Google Translate fallback failed:", e); return "";
-  }
+      return "";
+    }
 }
 
 const SAFETY_SETTINGS_OFF = [
@@ -257,20 +257,18 @@ async function translateWithGemini(originalText, targetLangCode, model, apiKey, 
   let translated = ""; let geminiError = ""; 
 
   if (isPro) {
-    try { translated = await _geminiAttempt(prompt, model, apiKey, 8000); } catch (e) { geminiError = e.name === "AbortError" ? `${model}: timeout (8s)` : `${model}: ${e.message}`; console.warn("Gemini Pro attempt failed:", geminiError); }
+    try { translated = await _geminiAttempt(prompt, model, apiKey, 8000); } catch (e) { geminiError = e.name === "AbortError" ? `${model}: timeout (8s)` : `${model}: ${e.message}`; }
   } else {
-    try { translated = await _geminiAttempt(prompt, model, apiKey, 4000); } catch (e) { geminiError = e.name === "AbortError" ? `${model}: timeout (4s)` : `${model}: ${e.message}`; console.warn("Gemini attempt 1 failed:", geminiError); }
+    try { translated = await _geminiAttempt(prompt, model, apiKey, 4000); } catch (e) { geminiError = e.name === "AbortError" ? `${model}: timeout (4s)` : `${model}: ${e.message}`; }
     if (!translated) {
       try { translated = await _geminiAttempt(prompt, model, apiKey, 4000); } catch (e) {
         if (!geminiError) geminiError = e.name === "AbortError" ? `${model}: timeout (4s)` : `${model}: ${e.message}`;
-        console.warn("Gemini attempt 2 failed:", geminiError);
       }
     }
   }
 
   let usedFallback = false;
   if (!translated) {
-    console.warn("Gemini unavailable, trying Google Translate fallback...");
     translated = await translateWithGoogle(input, targetLangCode);
     if (translated) usedFallback = true;
   }
@@ -709,7 +707,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (model === "google-translate") {
             translated = await translateWithGoogle(message.text, targetLang);
           } else if (!apiKey) {
-            console.warn("Gemini API key not set, falling back to Google Translate.");
             translated = await translateWithGoogle(message.text, targetLang);
             if (translated) translated = "\u207A " + translated; 
           } else {
@@ -718,10 +715,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               translated = result?.text ?? result ?? "";
               const geminiError = result?.geminiError || "";
               if (!skipTts && res.enableTts && translated) { const ttsText = translated.replace(/^\u207A\s*/, ""); speakText(ttsText, targetLang); }
-              if (geminiError) { console.warn("Gemini fallback to GT, reason:", geminiError); sendResponse({ success: true, data: translated, geminiError }); }
+              if (geminiError) { sendResponse({ success: true, data: translated, geminiError }); }
               else sendResponse({ success: true, data: translated });
             } catch (e) {
-              console.error("translateWithGemini caught:", e); sendResponse({ success: false, error: e.message });
+              sendResponse({ success: false, error: e.message });
             }
             return;
           }
