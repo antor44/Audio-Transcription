@@ -121,9 +121,9 @@ The easiest way to install the extension is directly from the official Chrome We
 > The extension is completely safe and open-source. If you want, all audio processing—including translation and TTS—can be performed locally on your machine.
 
 > [!TIP]
-> For example, you can avoid using any online service entirely by configuring WhisperLive and enabling local translation to English. For better translation quality, it is recommended to use a large model such as Large-v2 or Large-v3. You can also often obtain a decent translation by selecting a source language different from the video's original audio language.
+> For example, you can avoid using any online service entirely by configuring WhisperLive and enabling local translation to English. For better translation quality, it is recommended to use a large model such as Large-v2 or Large-v3. You can also often obtain a decent translation by selecting a source language different from the video's original audio language. Optionally, the TTS feature can read the subtitles aloud in the source language.
 >
-> In subtitle mode, you can choose an existing translated subtitle track or YouTube's own automatic translation. Optionally, the TTS feature can read the subtitles in the original language.
+> In subtitle mode, you can choose an existing translated subtitle track or YouTube's own automatic translation.
 >
 > On Linux, Chrome's built-in TTS provides very good quality for supported languages and runs entirely locally.
 
