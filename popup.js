@@ -206,7 +206,13 @@ function initElements() {
 // Normalizers
 function normalizeHost(v){ return String(v||'').trim()||DEFAULTS.serverHost; }
 function normalizePort(v){ return String(v||'').replace(/\D/g,'')||DEFAULTS.serverPort; }
-function normalizeSpeed(v){ const n=parseFloat(v); return isFinite(n)?Math.min(2,Math.max(.5,n)).toFixed(1):DEFAULTS.ttsSpeed; }
+function normalizeSpeed(v){
+  const n=parseFloat(v);
+  if(!isFinite(n)) return DEFAULTS.ttsSpeed;
+  // Round to 0.05 step increments and format (e.g. 1.00 -> "1.0", 1.25 -> "1.25")
+  const r=Math.round(Math.min(2,Math.max(.5,n))*20)/20;
+  return r.toFixed(2).replace(/0$/,'');
+}
 function normalizeRate(v,mn,mx,def){ const n=parseFloat(v); return isFinite(n)?Math.min(mx,Math.max(mn,n)).toFixed(1):def; }
 function maskApiKey(k){ if(!k) return ''; if(k.length<=6) return '•'.repeat(k.length); return k.slice(0,3)+'•'.repeat(Math.min(k.length-6,24))+k.slice(-3); }
 

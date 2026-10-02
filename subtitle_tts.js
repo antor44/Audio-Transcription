@@ -30,7 +30,7 @@
 
 window.__subtitleTtsApi = (function () {
 
-  // ── Profile-based accumulation parameters (exact v3.2.0 values) ───────────
+  // ── Profile-based accumulation parameters ────────────────────────────────
   function getProfileCfg(profile) {
     switch (profile) {
       case 'lowlag':
@@ -117,7 +117,25 @@ window.__subtitleTtsApi = (function () {
   let seekCooldownTimer = null;
   let _bmpSubtitleAttempted = false;
 
-  // ── Exact onSeeked from v3.2.0 (does not wipe history on seek) ────────────
+  // Detection state and diagnostics
+  let detectedLang = '';
+  let gotText = false;            // true once any subtitle text has been received
+  let attachedKind = '';          // 'dom' | 'track' | 'generic' | 'file' | ''
+  let attachedAt = 0;
+  let fallbackTried = false;
+  let lastDomRecheck = 0;
+  let initAt = 0;
+  let hintShown = false;
+  let genericCache = null;
+  const inlineHidden = new Map(); // element -> previous inline styles (for restoration)
+
+  // File-based subtitle source (VTT / SRT / TTML detected via network resource timing)
+  const fileCands = new Map();    // url -> { url, t }
+  const fileTried = new Set();
+  let fileTracks = [];            // [{ url, t, cues:[{s,e,text}], lang }]
+  let fileTrack = null, fileTimer = null, fileLoading = false, perfObs = null;
+
+  // ── Seek handler: resets in-flight state without discarding committed history ───
   function onSeeked() {
     isSeeking = true;
     cueQueue = [];
@@ -140,7 +158,7 @@ window.__subtitleTtsApi = (function () {
   }
 
   let cfg = {
-    playbackControl: 'pause', slowdownRate: 0.8,
+    playbackControl: 'pause', slowdownRate: 0.8, ownDocOnly: false,
     enableGeminiTranslation: false, enableTts: false,
     targetLanguage: 'en', ttsSpeed: 1.0, trackLang: '', sttsSelectedLanguage: '',
     hideNativeSubtitles: true, videoVolume: 1.0
@@ -148,12 +166,13 @@ window.__subtitleTtsApi = (function () {
 
   const originalVideoVolumes = new Map();
 
-  // Pattern matching standalone UI artifacts, keyboard shortcuts, or language toast banners
-  const SKIP = /auto.?generat|generad|généré|automatisch|gerado|generati|автоматически|automatically|inaccurat|turn off subtitle|desactivar|désactiver|keyboard shortcut|atajos|^\[[\p{L}\s]+\]$|^(?:[A-Za-zÀ-ÿ\s]+)\s*\([^\)]+\)$/iu;
+  // Matches UI artifacts, keyboard shortcut notices, and auto-generated caption banners
+  // that should be discarded rather than spoken aloud.
+  const SKIP = /auto.?generat|(?:generad|généré|gerad|generat)\w*\s+autom|automatisch\s+(?:generiert|erzeugt)|автоматически\s+создан|automatic captions|inaccurat|turn off subtitle|desactivar\s+subt|désactiver\s+les\s+sous|keyboard shortcut|atajos\s+de\s+teclado|^\[[\p{L}\s]+\]$|^(?:[A-Za-zÀ-ÿ\s]+)\s*\([^\)]+\)$/iu;
 
   function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
 
-  // ── Exact cleanSubtitle from v3.2.0 with language tag removal ────────────
+  // ── Subtitle text cleaner: strips HTML, timing artifacts, and UI banners ────────
   function cleanSubtitle(t) {
     let str = String(t || '');
     
@@ -184,7 +203,7 @@ window.__subtitleTtsApi = (function () {
 
   function nw(w) { return String(w || '').toLowerCase().replace(/[.,!?;:'"…']+$/, ''); }
 
-  // ── Exact committedPrefixLength from v3.2.0 ───────────────────────────────
+  // ── Overlap detection: finds committed word prefix shared with incoming text ──────
   function committedPrefixLength(committed, incoming, bypassStaticCheck) {
     const normCom = committed.map(nw);
     const normInc = incoming.map(nw);
@@ -220,7 +239,7 @@ window.__subtitleTtsApi = (function () {
     return 0;
   }
 
-  // ── Exact mergeCues from v3.2.0 ───────────────────────────────────────────
+  // ── Word accumulator: merges overlapping or extending caption chunks ──────────────
   function mergeCues(pending, incoming) {
     if (!pending.length) return incoming;
     if (!incoming.length) return pending;
@@ -255,7 +274,7 @@ window.__subtitleTtsApi = (function () {
     return [...pending, ...incoming];
   }
 
-  // ── Exact isAdPlaying from v3.2.0 (with scope extensions) ─────────────────
+  // ── Ad detection: checks known player ad states to suppress TTS during ads ────────
   function isAdPlaying() {
     if (window.location.hostname.includes('youtube.com')) {
       return !!document.querySelector('.ad-showing, .ad-interrupting, .ytp-ad-player-overlay');
@@ -270,7 +289,7 @@ window.__subtitleTtsApi = (function () {
     return false;
   }
 
-  function findAllMedia(root = document) {
+  function findAllMedia(root = document, ownOnly = cfg.ownDocOnly) {
     let media = [];
     try {
       media.push(...Array.from(root.querySelectorAll('video')));
@@ -278,40 +297,71 @@ window.__subtitleTtsApi = (function () {
     try {
       const all = root.querySelectorAll('*');
       for (const el of all) {
-        if (el.shadowRoot) media.push(...findAllMedia(el.shadowRoot));
+        if (el.shadowRoot) media.push(...findAllMedia(el.shadowRoot, ownOnly));
       }
     } catch(e) {}
-    try {
-      for (const iframe of root.querySelectorAll('iframe')) {
-        const doc = iframe.contentDocument || iframe.contentWindow?.document;
-        if (doc) media.push(...findAllMedia(doc));
-      }
-    } catch(e) {}
+    // Each frame has its own injected instance, so cross-frame DOM traversal is not needed
+    if (!ownOnly) {
+      try {
+        for (const iframe of root.querySelectorAll('iframe')) {
+          const doc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (doc) media.push(...findAllMedia(doc, ownOnly));
+        }
+      } catch(e) {}
+    }
     return media;
   }
 
-  function findVideo() {
-    const all = findAllMedia(document);
-    return all.reduce((b, v) => (!b || v.offsetWidth * v.offsetHeight > b.offsetWidth * b.offsetHeight) ? v : b, null);
+  // Visible area score, penalising decorative (looping muted) or unloaded videos
+  function videoScore(v) {
+    let sc = (v.offsetWidth || 0) * (v.offsetHeight || 0);
+    if (v.loop && v.muted) sc *= 0.1;
+    if (v.readyState === 0 && !v.currentSrc && !v.src) sc *= 0.5;
+    // Video has a source but no rendered dimensions yet (e.g. loading inside an iframe):
+    // assign a minimal score so frame probing still detects it as a candidate
+    if (sc === 0 && (v.currentSrc || v.src || v.readyState > 0)) sc = 50;
+    return sc;
   }
 
-  function findTrack(v) {
+  function findVideo(ownOnly) {
+    const all = findAllMedia(document, ownOnly === undefined ? cfg.ownDocOnly : ownOnly);
+    return all.reduce((b, v) => (!b || videoScore(v) > videoScore(b)) ? v : b, null);
+  }
+
+  // Used by the service worker to select the best frame for initialisation
+  function probe() {
+    const v = findVideo(true);
+    if (!v) return { hasVideo: false, score: 0, url: location.href };
+    return { hasVideo: true, score: videoScore(v) * ((!v.paused && !v.ended) ? 1.5 : 1), url: location.href };
+  }
+
+  function isSubtitleTrack(t) { return t.kind === 'subtitles' || t.kind === 'captions'; }
+
+  function findTrack(v, opts = {}) {
     if (!v) return null;
-    const ts = Array.from(v.textTracks || []);
+    // Ignore chapter, metadata, and description tracks — subtitles/captions only
+    const ts = Array.from(v.textTracks || []).filter(isSubtitleTrack);
     if (!ts.length) return null;
-    
+
     let track = ts.find(t => t.mode === 'showing');
     if (track) return track;
-    
+
     if (cfg.sttsSelectedLanguage && cfg.sttsSelectedLanguage.toUpperCase() !== 'AUTO') {
       const pref = cfg.sttsSelectedLanguage.toLowerCase();
       track = ts.find(t => (t.language || '').toLowerCase().startsWith(pref));
       if (track) return track;
     }
 
-    let hiddenTrack = ts.find(t => (t.kind === 'subtitles' || t.kind === 'captions') && t.mode === 'hidden');
+    let hiddenTrack = ts.find(t => t.mode === 'hidden');
     if (hiddenTrack) return hiddenTrack;
 
+    // Last resort: tracks in "disabled" state — loaded by the site but not yet activated by the user.
+    if (opts.allowDisabled) {
+      const pageLang = String(document.documentElement.lang || navigator.language || '').toLowerCase().split('-')[0];
+      return (pageLang && ts.find(t => (t.language || '').toLowerCase().startsWith(pageLang)))
+          || ts.find(t => t.cues && t.cues.length)
+          || ts[0];
+    }
     return null;
   }
 
@@ -320,13 +370,24 @@ window.__subtitleTtsApi = (function () {
     try {
       return v.closest(
         '.video-js, .jwplayer, .plyr, .bmpui-ui-uicontainer, ' +
+        '.theoplayer-container, [class*="theoplayer" i], ' +
         '[class*="player-wrapper" i], [class*="player-container" i]'
       ) || null;
     } catch (e) { return null; }
   }
 
+
   // ── Scoped DOM selectors matching dedicated subtitle containers ──────────
+  // THEOplayer renders WebVTT cues inside per-track wrappers and regions. Only text with an explicit colour class
+  // is wrapped in a "styling" span, so the track wrapper and region are matched as well; strict mode keeps the
+  // outermost element of each group. Its video.js-based UI also ships an always-empty .vjs-text-track-display,
+  // which is why this entry must come before the generic video.js one.
+  const THEO_CUE = '[class*="theoplayer-webvtt-texttrack"], [class*="theoplayer-webvtt-region"], [class*="theoplayer-webvtt-styling"]';
+  const THEO_BOX = '.theoplayer-texttracks, [class*="theoplayer-texttrack" i]';
+
   const DOM_SELS = [
+    // THEOplayer: container resolved by findTheoContainer(); strict = read cue elements only, never the whole container
+    { theo: true, strict: true, t: THEO_CUE },
     // YouTube
     { c: '.ytp-caption-window-container',                               t: '.ytp-caption-segment' },
     // Twitch
@@ -343,6 +404,12 @@ window.__subtitleTtsApi = (function () {
     { c: '.shaka-text-container',                                      t: '.shaka-text-wrapper' },
     // MediaElement
     { c: '.mejs__captions-layer',                                      t: '.mejs__captions-text' },
+    // THEOPlayer
+    { c: '.theoplayer-texttracks, .theo-captions-wrapper',             t: '.theoplayer-texttrack-cue-text, .vjs-text-track-cue' },
+    // Generic subtitle overlay layer
+    { c: '.rtve-subtitle-layer, .rtve-subtitle, [class*="subtitle-layer"]', t: 'span, p' },
+    // EBU-TT-D / HBBtv player
+    { c: '.ebu-tt-container, .ebuttd-container',                       t: 'p, span' },
     // Others
     { c: '.able-captions-wrapper',                                      t: '.able-captions' },
     { c: '.fp-captions',                                               t: 'p' },
@@ -351,18 +418,68 @@ window.__subtitleTtsApi = (function () {
     { c: '.player-timedtext',                                          t: '.player-timedtext-text-container' },
   ];
 
-  // ── Exact getDomText from v3.2.0 (with scoped container & top banner filter) ─
-  function getDomText() {
-    if (!activeSel) return '';
+
+  // ── Shadow DOM traversal: collects document and all open shadow roots ─────
+  function collectRoots(root, out = [], depth = 0) {
+    if (!root || depth > 6) return out;
+    out.push(root);
+    let all;
+    try { all = root.querySelectorAll('*'); } catch (e) { return out; }
+    for (const el of all) if (el.shadowRoot) collectRoots(el.shadowRoot, out, depth + 1);
+    return out;
+  }
+
+  function deepQueryAll(root, sel) {
+    const res = [];
+    for (const r of collectRoots(root)) {
+      try { for (const n of r.querySelectorAll(sel)) res.push(n); } catch (e) {}
+    }
+    return res;
+  }
+
+  // Extracts visible text from a container, joining text nodes and ignoring hidden/screen-reader elements
+  const GEN_HIDDEN_SEL = '[hidden], .ytp-visually-hidden, [class*="visually-hidden" i], [class*="sr-only" i], [class*="screen-reader" i], [class*="a11y" i]';
+  function collectText(el) {
+    const parts = [];
     try {
-      const scope = activeSel.root || getPlayerScope(videoEl) || document;
-      const container = scope.querySelector(activeSel.c);
-      if (!container) return '';
+      const doc = el.ownerDocument || document;
+      const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = walker.nextNode())) {
+        const p = n.parentElement;
+        if (!p) continue;
+        let hidden = false;
+        for (let a = p; a; a = (a === el ? null : a.parentElement)) {
+          if (a.matches && a.matches(GEN_HIDDEN_SEL)) { hidden = true; break; }
+        }
+        if (hidden) continue;
+        if (typeof p.checkVisibility === 'function' && !p.checkVisibility({ checkVisibilityCSS: true })) continue;
+        const t = norm(n.nodeValue);
+        if (t && parts[parts.length - 1] !== t) parts.push(t);
+      }
+    } catch (e) {}
+    return norm(parts.join(' '));
+  }
+
+  // ── getDomText (container already resolved by startObs → observedNode) ─────
+  function getDomText() {
+    if (!activeSel || !observedNode || !observedNode.isConnected) return '';
+    try {
+      const container = observedNode;
+
+      if (activeSel.generic) {
+        const gt = collectText(container);
+        return SKIP.test(gt) ? '' : gt;
+      }
 
       const PURGE = '.ytp-visually-hidden, .cdx-visually-hidden, .ytp-caption-window-header, .ytp-caption-window-rollup, [style*="clip: rect(0"]';
 
       if (activeSel.t) {
-        const ss = container.querySelectorAll(activeSel.t);
+        let ss = container.querySelectorAll(activeSel.t);
+        if (activeSel.strict) {
+          const all = Array.from(ss);
+          ss = all.filter(x => !all.some(o => o !== x && o.contains(x)));   // keep only the outermost element of each cue group
+        }
         if (ss.length) {
           const parts = [];
           for (const s of ss) {
@@ -377,7 +494,8 @@ window.__subtitleTtsApi = (function () {
             const clone = s.cloneNode(true);
             const hidden = clone.querySelectorAll(PURGE);
             hidden.forEach(el => el.remove());
-            const txt = norm(clone.textContent);
+            // strict: join text nodes with spaces so separate lines or styled segments do not run together
+            const txt = activeSel.strict ? collectText(s) : norm(clone.textContent);
             if (txt && !SKIP.test(txt)) {
               parts.push(txt);
             }
@@ -385,6 +503,9 @@ window.__subtitleTtsApi = (function () {
           if (parts.length) return norm(parts.join(' '));
         }
       }
+
+      // strict: with no visible cue there is no text (the container may also hold menus, titles, etc.)
+      if (activeSel.strict) return '';
 
       // Container fallback
       const clone = container.cloneNode(true);
@@ -396,24 +517,222 @@ window.__subtitleTtsApi = (function () {
     return '';
   }
 
+  // Stable container for THEOplayer cues. The player creates several sibling .theoplayer-texttracks boxes under one
+  // parent and only one of them holds the visible cue, so the common parent is observed instead of a single box.
+  function findTheoContainer(roots) {
+    let cue = null, firstBox = null;
+    for (const r of roots) {
+      try {
+        if (!cue) cue = r.querySelector(THEO_CUE);
+        if (!firstBox) firstBox = r.querySelector(THEO_BOX);
+      } catch (e) {}
+    }
+    const box = cue ? cue.closest(THEO_BOX) : firstBox;
+    if (box) return box.parentElement || box;
+    if (!cue) return null;
+    const root = videoEl ? getSearchRoot(videoEl) : null;
+    if (root && root.contains && root.contains(cue)) return root;
+    return cue.parentElement && cue.parentElement.parentElement || cue.parentElement;
+  }
+
+  // Searches known subtitle containers, including those inside shadow DOM roots
   function findDom() {
     const scope = getPlayerScope(videoEl);
-    if (scope) {
+    const scopes = scope ? [scope, document] : [document];
+    for (const sc of scopes) {
+      const roots = collectRoots(sc);
       for (const s of DOM_SELS) {
-        try {
-          const container = scope.querySelector(s.c);
-          if (container && document.body.contains(container)) return { ...s, root: scope };
-        } catch (e) {}
+        if (s.theo) {
+          const tc = findTheoContainer(roots);
+          if (tc && tc.isConnected) return { ...s, c: 'theoplayer-webvtt-styling', root: sc, container: tc };
+          continue;
+        }
+        for (const r of roots) {
+          try {
+            const c = r.querySelector(s.c);
+            if (c && c.isConnected) return { ...s, root: sc, container: c };
+          } catch (e) {}
+        }
       }
-    }
-    for (const s of DOM_SELS) {
-      const container = document.querySelector(s.c);
-      if (container && document.body.contains(container)) return { ...s, root: document };
     }
     return null;
   }
 
-  // ── Exact accumulateText from v3.2.0 ─────────────────────────────────────
+  // ── Generic player detection (heuristic container discovery) ─────────────
+  const GEN_INCLUDE_RE = /subtitle|caption|timed-?text|sous-?titre|untertitel|sottotitol|subt[ií]tulo|(?:^|[\s_-])cues?(?:$|[\s_-])/i;
+  const GEN_STRONG_RE  = /subtitle|caption|timed-?text|sous-?titre|untertitel|sottotitol|subt[ií]tulo/i;
+  const GEN_EXCLUDE_RE = /button|btn|menu|toggle|icon|setting|option|select|dropdown|popup|popover|modal|dialog|tooltip|picker|switch|control|thumb|preview|list|lang(?:uage)?s?(?:$|[\s_-])|announce|live-?region|sr-only|visually-hidden|screen-?reader|a11y|shortcut|figcaption|transcript/i;
+  const GEN_BAD_TAG = new Set(['BUTTON','A','LI','UL','OL','INPUT','SELECT','LABEL','TABLE','FIGCAPTION','H1','H2','H3','H4','H5','H6','SCRIPT','STYLE','SVG','PATH','VIDEO','SOURCE','TRACK','NOSCRIPT']);
+  const GEN_BAD_ROLE = /^(button|menu|menuitem|menuitemradio|menuitemcheckbox|option|listbox|tab|switch|checkbox|dialog)$/;
+
+  // Walks up the DOM to find the tightest ancestor that still contains the video element
+  function getSearchRoot(v) {
+    try {
+      const vr = v.getBoundingClientRect();
+      let best = v.parentElement || v.getRootNode();
+      let el = v.parentElement;
+      for (let i = 0; el && i < 10; i++) {
+        const r = el.getBoundingClientRect();
+        if (vr.width && (r.width > vr.width * 1.6 + 40 || r.height > vr.height * 1.6 + 40)) break;
+        best = el;
+        const rn = el.getRootNode && el.getRootNode();
+        el = el.parentElement || ((rn && rn.host) ? rn.host : null);
+      }
+      return best;
+    } catch (e) { return document; }
+  }
+
+  function scanGeneric() {
+    if (!videoEl) return [];
+    const now = Date.now();
+    const interval = (now - initAt > 30000) ? 8000 : 2500;
+    if (genericCache && now - genericCache.ts < interval) return genericCache.list;
+
+    let list = [];
+    try {
+      const vr = videoEl.getBoundingClientRect();
+      const seen = new Set();
+
+      const evaluate = (el, needText) => {
+        if (seen.has(el) || el === videoEl) return;
+        seen.add(el);
+        if (GEN_BAD_TAG.has(String(el.tagName).toUpperCase())) return;
+        const cls = (el.getAttribute('class') || '') + ' ' + (el.id || '');
+        if (!GEN_INCLUDE_RE.test(cls) || GEN_EXCLUDE_RE.test(cls)) return;
+        if (GEN_BAD_ROLE.test(el.getAttribute('role') || '')) return;
+        if (el.getElementsByTagName('*').length > 40) return;
+        if (el.querySelector('video, button, input, select, a[href], [role="menuitem"], [role="option"], [role="menuitemradio"]')) return;
+
+        let text = collectText(el);
+        if (text.length > 400 || SKIP.test(text)) text = '';
+
+        const r = el.getBoundingClientRect();
+        let overlaps = true;   // If video dimensions are not yet available, do not discard
+        if (vr.width > 0) {
+          overlaps = r.width > 0 && r.height > 0 &&
+            (r.left + r.width / 2) >= vr.left && (r.left + r.width / 2) <= vr.right &&
+            (r.top + r.height / 2) >= vr.top && (r.top + r.height / 2) <= vr.bottom;
+        }
+        const pos = getComputedStyle(el).position;
+        const overlay = pos === 'absolute' || pos === 'fixed';
+
+        if (text) {
+          if (!overlaps) return;                                  // Exclude external elements outside video bounds
+        } else {
+          if (needText || !overlay || !GEN_STRONG_RE.test(cls)) return;   // empty candidates: only overlays with an explicit subtitle-like class name
+        }
+
+        let score = GEN_STRONG_RE.test(cls) ? 3 : 1;
+        if (text) score += 4;
+        if (overlaps) score += 2;
+        if (overlay) score += 1;
+        list.push({ el, text, score, cls });
+      };
+
+      // 1) search within the player container
+      for (const el of deepQueryAll(getSearchRoot(videoEl), '[class], [id]')) evaluate(el, false);
+      // 2) if nothing found with text, broaden to any element with text overlapping the video
+      if (!list.some(c => c.text) && document.body) {
+        for (const el of deepQueryAll(document.body, '[class], [id]')) evaluate(el, true);
+      }
+
+      // Keep only the outermost container in each nested group
+      list = list.filter(c => !list.some(o => o !== c && o.el.contains(c.el)));
+      list.sort((a, b) => b.score - a.score);
+    } catch (e) { list = []; }
+
+    genericCache = { ts: now, list };
+    return list;
+  }
+
+  function findGenericDom(withText) {
+    const list = scanGeneric();
+    const c = list.find(x => withText ? !!x.text : true);
+    return c ? { generic: true, container: c.el, root: null, c: null, t: null } : null;
+  }
+
+  // Hides the native subtitle container when it cannot be reached by the global stylesheet
+  function applyInlineHide() {
+    const el = observedNode;
+    if (!el || cfg.hideNativeSubtitles === false) return;
+    try {
+      if (!inlineHidden.has(el)) {
+        inlineHidden.set(el, {
+          o: el.style.getPropertyValue('opacity'), oP: el.style.getPropertyPriority('opacity'),
+          p: el.style.getPropertyValue('pointer-events'), pP: el.style.getPropertyPriority('pointer-events')
+        });
+      }
+      el.style.setProperty('opacity', '0.01', 'important');
+      el.style.setProperty('pointer-events', 'none', 'important');
+    } catch (e) {}
+  }
+
+  function restoreInlineHide() {
+    inlineHidden.forEach((prev, el) => {
+      try {
+        if (prev.o) el.style.setProperty('opacity', prev.o, prev.oP); else el.style.removeProperty('opacity');
+        if (prev.p) el.style.setProperty('pointer-events', prev.p, prev.pP); else el.style.removeProperty('pointer-events');
+      } catch (e) {}
+    });
+    inlineHidden.clear();
+  }
+
+  // Returns a diagnostics snapshot — call window.__subtitleTtsApi.diagnose() in the extension context
+  function diagnose() {
+    const out = { frame: location.href, isTop: window.top === window, attached: attachedKind || 'none', gotText, videos: [], knownDom: null, generic: [] };
+    try {
+      out.videos = findAllMedia(document).map(v => ({
+        w: v.offsetWidth, h: v.offsetHeight, paused: v.paused, muted: v.muted,
+        src: String(v.currentSrc || v.src || '').slice(0, 90),
+        tracks: Array.from(v.textTracks || []).map(t => ({ kind: t.kind, lang: t.language, label: t.label, mode: t.mode, cues: t.cues ? t.cues.length : null }))
+      }));
+    } catch (e) {}
+    try { const sel = findDom(); out.knownDom = sel ? sel.c : null; } catch (e) {}
+    try {
+      out.generic = scanGeneric().slice(0, 6).map(c => ({ tag: c.el.tagName, cls: c.cls.trim().slice(0, 100), text: c.text.slice(0, 60), score: c.score }));
+    } catch (e) {}
+
+    // Subtitle files detected via network resource timing and their load status
+    out.fileCandidates = Array.from(fileCands.keys()).slice(-8).map(u => u.slice(0, 140));
+    out.fileTracks = fileTracks.map(t => ({ url: t.url.slice(0, 100), cues: t.cues.length, lang: t.lang }));
+    // Iframes present on the page (the player may reside in a child frame)
+    try {
+      out.iframes = Array.from(document.querySelectorAll('iframe')).slice(0, 12)
+        .map(f => ({ src: String(f.src || '').slice(0, 110), w: f.offsetWidth, h: f.offsetHeight }));
+    } catch (e) {}
+    // Buttons whose labels or classes suggest subtitle/CC controls
+    try {
+      const CC_RE = /subtit|caption|cc|subt[ií]tulo|sous-?titre|untertitel|sottotitol/i;
+      out.ccButtons = deepQueryAll(document, 'button, [role="button"], [role="switch"], [role="menuitem"], [role="menuitemradio"]')
+        .map(b => ({ b, label: (b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim().slice(0, 40), cls: String(b.getAttribute('class') || '').slice(0, 70) }))
+        .filter(x => CC_RE.test(x.label) || CC_RE.test(x.cls))
+        .slice(0, 8)
+        .map(x => ({ tag: x.b.tagName, label: x.label, cls: x.cls, pressed: x.b.getAttribute('aria-pressed') || x.b.getAttribute('aria-checked') || x.b.getAttribute('aria-selected') }));
+    } catch (e) {}
+    // Short visible text nodes overlapping the video, regardless of class names
+    try {
+      if (videoEl) {
+        const vr = videoEl.getBoundingClientRect();
+        const found = [];
+        for (const el of deepQueryAll(getSearchRoot(videoEl), '*').slice(0, 4000)) {
+          if (found.length >= 10) break;
+          if (el === videoEl || GEN_BAD_TAG.has(String(el.tagName).toUpperCase())) continue;
+          let own = '';
+          for (const n of el.childNodes) if (n.nodeType === 3) own += n.nodeValue;
+          own = norm(own);
+          if (own.length < 2 || own.length > 200) continue;
+          const r = el.getBoundingClientRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          if (!(r.width > 0 && cx >= vr.left && cx <= vr.right && cy >= vr.top && cy <= vr.bottom)) continue;
+          found.push({ tag: el.tagName, cls: String(el.getAttribute('class') || '').slice(0, 80), text: own.slice(0, 60) });
+        }
+        out.textOverVideo = found;
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  // ── Main text accumulator: processes incoming subtitle text into the word buffer ──
   function accumulateText(rawText) {
     if (stopped || isSeeking || isAdPlaying()) return;
 
@@ -441,6 +760,7 @@ window.__subtitleTtsApi = (function () {
       return;
     }
 
+    gotText = true;
     const prevText = lastSeenText;
     if (clean === lastSeenText) return;
     lastSeenText = clean;
@@ -468,7 +788,7 @@ window.__subtitleTtsApi = (function () {
     evaluateCommit();
   }
 
-  // ── Exact evaluateCommit from v3.2.0 (with colon support for DW German) ───
+  // ── Commit evaluator: decides when buffered words form a speakable sentence ────────
   function evaluateCommit() {
     const wc = pendingWords.length;
     if (!wc) return;
@@ -551,7 +871,7 @@ window.__subtitleTtsApi = (function () {
     }
   }
 
-  // ── Exact softFlushPending from v3.2.0 (preserves unpunctuated text) ───────
+  // ── Soft flush: commits at the last sentence boundary, retaining trailing fragments 
   function softFlushPending() {
     clearTimeout(debTimer);
     if (!pendingWords.length) return;
@@ -583,7 +903,7 @@ window.__subtitleTtsApi = (function () {
     }
   }
 
-  // ── Exact forceFlushPending from v3.2.0 ──────────────────────────────────
+  // ── Force flush: commits all buffered words immediately regardless of punctuation ──
   function forceFlushPending() {
     clearTimeout(debTimer);
     clearTimeout(silenceTimer);
@@ -619,7 +939,7 @@ window.__subtitleTtsApi = (function () {
     }
   }
 
-  // Purely mutation-driven: only runs on actual DOM character/child mutations
+  // Mutation callback: fires only on actual DOM text or child-list changes
   function onMutation() { 
     if (!stopped) {
       accumulateText(getDomText()); 
@@ -638,17 +958,17 @@ window.__subtitleTtsApi = (function () {
     accumulateText(newText);
   }
 
-  // Purely event-driven startObs from v3.2.0 (no eager synchronous DOM reads)
+  // Starts a MutationObserver on the resolved subtitle container (including shadow DOM roots)
   function startObs(sel) {
-    activeSel = sel;
-    const scope = sel.root || getPlayerScope(videoEl) || document;
-    const c = scope.querySelector(sel.c);
-    if (!c) return false;
+    const c = sel && sel.container;
+    if (!c || !c.isConnected) return false;
     if (obs) obs.disconnect();
+    activeSel = sel;
     isTextTrackMode = false;
-    observedNode = c; 
+    observedNode = c;
     obs = new MutationObserver(onMutation);
     obs.observe(c, { childList: true, subtree: true, characterData: true });
+    if (sel.generic || (c.getRootNode && c.getRootNode() !== document)) applyInlineHide();
     return true;
   }
 
@@ -727,7 +1047,7 @@ window.__subtitleTtsApi = (function () {
     );
   }
 
-  // ── Exact commitText from v3.2.0 ─────────────────────────────────────────
+  // ── Commit: validates and enqueues text for playback ─────────────────────────────
   function commitText(text) {
     const t = norm(text);
     if (skip(t)) return;
@@ -737,7 +1057,7 @@ window.__subtitleTtsApi = (function () {
     if (!isSpeaking) processQueue();
   }
 
-  // ── Exact onDone from v3.2.0 ─────────────────────────────────────────────
+  // ── TTS completion handler: advances the playback queue ─────────────────────────
   function onDone() {
     clearTimeout(ttsId);
     ttsId = null;
@@ -747,7 +1067,7 @@ window.__subtitleTtsApi = (function () {
     if (!stopped) processQueue();
   }
 
-  // ── Exact processQueue from v3.2.0 ───────────────────────────────────────
+  // ── Queue processor: handles translation, display and TTS for each committed item ─
   async function processQueue() {
     if (stopped || isSpeaking || !cueQueue.length) return;
     const now = Date.now();
@@ -855,9 +1175,11 @@ window.__subtitleTtsApi = (function () {
     isProgressiveMode = false;
     cfg.trackLang = '';
     detectedLang = '';
+    gotText = false;
+    fallbackTried = false;
   }
 
-  // ── Exact ensureSubtitlesActive from v3.2.0 (with 3Cat & DW UI clicks only)
+  // ── Subtitle activation: programmatically enables CC in known player UIs ──────────
   function ensureSubtitlesActive() {
     try {
       const ytCc = document.querySelector('.ytp-subtitles-button');
@@ -894,7 +1216,7 @@ window.__subtitleTtsApi = (function () {
     } catch(e) {}
   }
 
-  function updateHideNativeSubtitlesStyle() {
+  function updateHideStyleSheet() {
     try {
       const existing = document.getElementById('stts-hide-cc');
       if (cfg.hideNativeSubtitles !== false) {
@@ -907,7 +1229,8 @@ window.__subtitleTtsApi = (function () {
             .jw-captions, .jw-text-track-display,
             .vjs-text-track-display, .plyr__captions,
             .shaka-text-container, .player-captions-container__caption-window,
-            .player-timedtext, .dmp_subtitles, .mejs__captions-layer {
+            .player-timedtext, .dmp_subtitles, .mejs__captions-layer,
+            .theoplayer-texttracks, [class*="theoplayer-webvtt-styling"] {
               opacity: 0.01 !important;
               pointer-events: none !important;
             }
@@ -920,39 +1243,351 @@ window.__subtitleTtsApi = (function () {
     } catch(e) {}
   }
 
-  // ── Exact attachSubtitles from v3.2.0 (DOM takes priority, fallback to track)
-  function attachSubtitles() {
-    if (!videoEl || stopped) return;
+  function updateHideNativeSubtitlesStyle() {
+    updateHideStyleSheet();
+    if (cfg.hideNativeSubtitles !== false) {
+      if (activeSel && observedNode && (activeSel.generic || observedNode.getRootNode() !== document)) applyInlineHide();
+    } else {
+      restoreInlineHide();
+    }
+  }
 
-    if (!activeTrack && !obs) {
-      const sel = findDom();
-      if (sel && startObs(sel)) {
-        // Successfully attached to DOM
-      } else {
-        const t = findTrack(videoEl);
-        if (t) {
-          activeTrack = t;
-          cfg.trackLang = activeTrack.language || '';
-          if (activeTrack.mode === 'disabled') activeTrack.mode = 'hidden';
-          activeTrack.addEventListener('cuechange', onCueChange);
+  // ═════════════ File-based subtitle source ══════════════════════════════════════
+  // Handles players that load subtitles as external files (VTT/SRT/TTML) and render them
+  // on a canvas, in a closed shadow DOM, or with unpredictable class names.
+  // Discovered URLs are fetched and synchronised with video.currentTime.
+  const SUB_NOISE_RE = /\.(?:m3u8|mpd|m4s|mp4|ts|jpe?g|png|gif|webp|svg|js|css|json|woff2?|ico)(?=$|[?#])|sitemap|rss|feed|manifest|thumbnail|thumb|sprite|storyboard|chapters?/i;
+  const SUB_HINT_RE  = /subtitl|caption|subtit|sous-?titre|untertitel|sottotitol|timedtext|[_\-/.]subs?[_\-/.]|\/vtt\//i;
+
+  function isSubtitleUrl(u) {
+    if (!/^https?:/i.test(u)) return false;
+    let path = u;
+    try { const x = new URL(u); path = x.pathname + x.search; } catch (e) {}
+    if (SUB_NOISE_RE.test(path)) return false;
+    if (/\.(?:vtt|webvtt|srt|ttml|dfxp|ebuttd)(?=$|[?#])/i.test(path)) return true;
+    if (/\.xml(?=$|[?#])/i.test(path) && SUB_HINT_RE.test(u)) return true;
+    return SUB_HINT_RE.test(u) && /[?&](?:fmt|format|type|ext)=(?:vtt|srt|ttml|xml)/i.test(u);
+  }
+
+  function noteResource(url, t) {
+    if (!url || fileCands.has(url) || !isSubtitleUrl(url)) return;
+    fileCands.set(url, { url, t: (typeof t === 'number' ? t : performance.now()) });
+    while (fileCands.size > 12) fileCands.delete(fileCands.keys().next().value);
+  }
+
+  function startResourceWatch() {
+    if (perfObs) return;
+    try { performance.setResourceTimingBufferSize(1500); } catch (e) {}
+    try { performance.getEntriesByType('resource').forEach(e => noteResource(e.name, e.startTime)); } catch (e) {}
+    try {
+      perfObs = new PerformanceObserver(list => list.getEntries().forEach(e => noteResource(e.name, e.startTime)));
+      perfObs.observe({ type: 'resource', buffered: true });
+    } catch (e) { perfObs = null; }
+  }
+  function stopResourceWatch() {
+    if (perfObs) { try { perfObs.disconnect(); } catch (e) {} perfObs = null; }
+  }
+
+  function decodeEntities(t) {
+    return String(t)
+      .replace(/&#x([0-9a-f]+);/gi, (m, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch (e) { return ' '; } })
+      .replace(/&#(\d+);/g, (m, d) => { try { return String.fromCodePoint(parseInt(d, 10)); } catch (e) { return ' '; } })
+      .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  }
+
+  function clockToSec(str) {
+    const parts = String(str).trim().replace(',', '.').split(':');
+    let sec = 0;
+    for (const p of parts) sec = sec * 60 + (parseFloat(p) || 0);
+    return sec;
+  }
+
+  function parseVttSrt(text) {
+    const cues = [];
+    const TS = /((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})/;
+    for (const block of text.replace(/\r/g, '').split(/\n{2,}/)) {
+      const lines = block.split('\n');
+      const i = lines.findIndex(l => TS.test(l));
+      if (i < 0) continue;
+      const m = lines[i].match(TS);
+      const body = norm(decodeEntities(lines.slice(i + 1).join(' ').replace(/<[^>]*>/g, '')));
+      if (body) cues.push({ s: clockToSec(m[1]), e: clockToSec(m[2]), text: body });
+    }
+    return { cues, lang: '' };
+  }
+
+  function ttmlTime(v, fps, tickRate) {
+    if (v == null) return null;
+    v = String(v).trim();
+    let m = v.match(/^(\d+):(\d{2}):(\d{2})(?:\.(\d+)|:(\d+)(?:\.\d+)?)?$/);
+    if (m) {
+      let sec = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+      if (m[4]) sec += parseFloat('0.' + m[4]);
+      else if (m[5]) sec += (+m[5]) / fps;
+      return sec;
+    }
+    m = v.match(/^(\d+(?:\.\d+)?)(h|ms|m|s|f|t)$/);
+    if (m) {
+      const n = parseFloat(m[1]);
+      switch (m[2]) {
+        case 'h': return n * 3600; case 'm': return n * 60; case 's': return n;
+        case 'ms': return n / 1000; case 'f': return n / fps; case 't': return n / tickRate;
+      }
+    }
+    return null;
+  }
+
+  function parseTtml(text) {
+    let doc;
+    try { doc = new DOMParser().parseFromString(text, 'application/xml'); } catch (e) { return { cues: [], lang: '' }; }
+    if (!doc || !doc.documentElement || doc.getElementsByTagName('parsererror').length) return { cues: [], lang: '' };
+    const root = doc.documentElement;
+    const attr = (el, n) => el.getAttribute(n) || el.getAttribute('ttp:' + n) || el.getAttributeNS('http://www.w3.org/ns/ttml#parameter', n) || '';
+    const fps = parseFloat(attr(root, 'frameRate')) || 30;
+    const tickRate = parseFloat(attr(root, 'tickRate')) || 10000000;
+    const lang = (root.getAttribute('xml:lang') || root.getAttribute('lang') || '').toLowerCase().split('-')[0];
+
+    const cueText = (node) => {
+      let out = '';
+      for (const ch of Array.from(node.childNodes)) {
+        if (ch.nodeType === 3) out += ch.nodeValue;
+        else if (ch.nodeType === 1) out += (/(^|:)br$/i.test(ch.nodeName) ? ' ' : cueText(ch));
+      }
+      return out;
+    };
+
+    const cues = [];
+    for (const p of Array.from(doc.getElementsByTagNameNS('*', 'p'))) {
+      let base = 0;
+      for (let a = p.parentElement; a && a !== root.parentNode; a = a.parentElement) {
+        const b = ttmlTime(a.getAttribute('begin'), fps, tickRate);
+        if (b != null) base += b;
+      }
+      let b = ttmlTime(p.getAttribute('begin'), fps, tickRate);
+      let e = ttmlTime(p.getAttribute('end'), fps, tickRate);
+      const d = ttmlTime(p.getAttribute('dur'), fps, tickRate);
+      if (b == null) continue;
+      if (e == null && d != null) e = b + d;
+      if (e == null) continue;
+      const body = norm(decodeEntities(cueText(p)));
+      if (body) cues.push({ s: base + b, e: base + e, text: body });
+    }
+    return { cues, lang };
+  }
+
+  function parseSubtitleText(raw) {
+    const t = String(raw || '').replace(/^\uFEFF/, '').trim();
+    if (!t) return { cues: [], lang: '' };
+    const head = t.slice(0, 4000);
+    let res;
+    if (/^WEBVTT/.test(t) || /-->/.test(head)) res = parseVttSrt(t);
+    else if (/<(?:[\w-]+:)?tt[\s>]/i.test(t.slice(0, 3000))) res = parseTtml(t);
+    else return { cues: [], lang: '' };
+    const c = res.cues;
+    // Discard thumbnail/storyboard VTT files (text is an image URL) and chapter tracks
+    if (c.length && c.filter(x => /\.(?:jpe?g|png|webp|gif)(?:[#?]|$)/i.test(x.text)).length > c.length * 0.6) return { cues: [], lang: '' };
+    c.sort((a, b) => a.s - b.s);
+    return res;
+  }
+
+  async function fetchSubtitleText(url) {
+    try {
+      const r = await fetch(url);                 // try from the page first (same origin or CDN with open CORS)
+      if (r.ok) { const tx = await r.text(); if (tx.length < 4e6) return tx; }
+    } catch (e) {}
+    try {                                          // fall back to the service worker (host permission, no CORS restrictions)
+      const res = await new Promise(resolve => {
+        const to = setTimeout(() => resolve(null), 12000);
+        chrome.runtime.sendMessage({ action: 'fetchSubtitleFile', url }, (r) => { clearTimeout(to); void chrome.runtime.lastError; resolve(r); });
+      });
+      if (res && res.ok && typeof res.text === 'string') return res.text;
+    } catch (e) {}
+    return '';
+  }
+
+  function onFileTick() {
+    if (stopped || !fileTrack || !videoEl || isSeeking) return;
+    const t = videoEl.currentTime + 0.05;
+    const active = [];
+    for (const c of fileTrack.cues) {
+      if (c.s > t) break;
+      if (t < c.e) active.push(c.text);
+    }
+    accumulateText(active.join(' '));
+  }
+
+  function stopFileDriver() {
+    if (fileTimer) { clearInterval(fileTimer); fileTimer = null; }
+    fileTrack = null;
+  }
+
+  function attachFileTrack(tr) {
+    detachSource();                 // Detach existing DOM / track / generic listeners
+    resetState();
+    fileTrack = tr;
+    attachedKind = 'file';
+    attachedAt = Date.now();
+    isTextTrackMode = true;         // Static cue stream behavior
+    if (tr.lang && !cfg.sttsSelectedLanguage) cfg.trackLang = tr.lang;
+    fileTimer = setInterval(onFileTick, 200);
+  }
+
+  function pickFileTrack(fresh) {
+    const pool = fresh && fresh.length ? fresh : fileTracks;
+    if (!pool.length) return null;
+    const pref = (cfg.sttsSelectedLanguage || '').toLowerCase();
+    if (pref) {
+      const re = new RegExp('(?:^|[^a-z])' + pref.slice(0, 2) + '(?:[^a-z]|$)', 'i');
+      const hit = pool.find(t => t.lang === pref.slice(0, 2) || re.test(t.url.split('?')[0].split('/').slice(-3).join('/')));
+      if (hit) return hit;
+    }
+    // On first load the default track is usually requested first;
+    // on subsequent loads prefer the most recently requested one (language or content change)
+    const sorted = pool.slice().sort((a, b) => a.t - b.t);
+    return fileTrack ? sorted[sorted.length - 1] : sorted[0];
+  }
+
+  function hasUntriedFiles() {
+    for (const u of fileCands.keys()) if (!fileTried.has(u)) return true;
+    return false;
+  }
+
+  async function loadFileSource() {
+    if (fileLoading || stopped) return;
+    const urls = Array.from(fileCands.values()).filter(c => !fileTried.has(c.url)).sort((a, b) => b.t - a.t).slice(0, 4);
+    if (!urls.length) return;
+    fileLoading = true;
+    const fresh = [];
+    try {
+      for (const c of urls) {
+        fileTried.add(c.url);
+        const parsed = parseSubtitleText(await fetchSubtitleText(c.url));
+        if (stopped) return;
+        if (parsed.cues.length) {
+          const tr = { url: c.url, t: c.t, cues: parsed.cues, lang: parsed.lang };
+          fileTracks.push(tr); fresh.push(tr);
         }
       }
+    } finally { fileLoading = false; }
+    if (stopped || !fresh.length) return;
+    // Do not override a DOM/track source that is already delivering text.
+    // If already using a file track, only switch when a newer file is discovered.
+    if ((attachedKind === 'dom' || attachedKind === 'track' || attachedKind === 'generic') && gotText) return;
+    if (attachedKind === 'dom') return;
+    const pick = pickFileTrack(fresh);
+    if (pick && pick !== fileTrack) attachFileTrack(pick);
+  }
+
+  function attachTrack(t) {
+    activeTrack = t;
+    cfg.trackLang = activeTrack.language || '';
+    if (activeTrack.mode === 'disabled') activeTrack.mode = 'hidden';
+    activeTrack.addEventListener('cuechange', onCueChange);
+  }
+
+  function detachSource() {
+    stopFileDriver();
+    if (obs) { obs.disconnect(); obs = null; }
+    if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+    restoreInlineHide();
+    activeSel = null;
+    observedNode = null;
+    attachedKind = '';
+  }
+
+  // Attachment priority: known DOM selectors → active/hidden text tracks → generic overlay with text
+  //   → disabled text track (promoted to "hidden") → empty generic overlay
+  function tryAttach(exclude) {
+    let kind = '';
+    if (exclude !== 'dom') {
+      const sel = findDom();
+      if (sel && startObs(sel)) kind = 'dom';
+    }
+    if (!kind && exclude !== 'track') {
+      const t = findTrack(videoEl);
+      if (t) { attachTrack(t); kind = 'track'; }
+    }
+    if (!kind && exclude !== 'generic') {
+      const g = findGenericDom(true);
+      if (g && startObs(g)) kind = 'generic';
+    }
+    if (!kind && exclude !== 'track') {
+      const t = findTrack(videoEl, { allowDisabled: true });
+      if (t) { attachTrack(t); kind = 'track'; }
+    }
+    if (!kind && exclude !== 'generic') {
+      const g = findGenericDom(false);
+      if (g && startObs(g)) kind = 'generic';
+    }
+    if (kind) { attachedKind = kind; attachedAt = Date.now(); }
+    return kind;
+  }
+
+  function attachSubtitles() {
+    if (!videoEl || stopped) return;
+    if (fileTrack) return;      // Active file track is already in use
+
+    if (!activeTrack && !obs) {
+      tryAttach();
     } else if (activeTrack) {
       const trackValid = Array.from(videoEl.textTracks || []).includes(activeTrack);
       if (!trackValid || activeTrack.mode === 'disabled') {
         activeTrack.removeEventListener('cuechange', onCueChange);
         activeTrack = null;
+        attachedKind = '';
         resetState();
       }
     } else if (obs) {
-      if (!observedNode || !document.body.contains(observedNode)) {
-        obs.disconnect(); obs = null; activeSel = null; observedNode = null;
+      // Use isConnected rather than document.body.contains to handle shadow DOM roots
+      if (!observedNode || !observedNode.isConnected) {
+        detachSource();
         resetState();
       }
     }
   }
 
-  // ── Exact init and observer loop from v3.2.0 ─────────────────────────────
+  // Watchdog: tries file-based sources when live playback produces no text,
+  // falls back to alternative sources if the current one stays silent,
+  // and shows a hint when no subtitle source is found.
+  function watchdog() {
+    if (stopped || !videoEl) return;
+    const now = Date.now();
+    const playing = !videoEl.paused && !videoEl.ended;
+
+    // Try loading any newly discovered subtitle files
+    if (!fileLoading && hasUntriedFiles()) {
+      const noText = !gotText && attachedKind !== 'dom';
+      if ((playing && now - initAt > 4000 && noText) || attachedKind === 'file') loadFileSource().catch(() => {});
+    }
+
+    // Attached to a DOM container that has not produced text yet: switch if a higher-priority container appears
+    if (attachedKind === 'dom' && !gotText && now - lastDomRecheck > 2000) {
+      lastDomRecheck = now;
+      const better = findDom();
+      if (better && better.container !== observedNode && better.container.isConnected) {
+        detachSource();
+        resetState();
+        if (startObs(better)) { attachedKind = 'dom'; attachedAt = now; }
+      }
+    }
+
+    if (!attachedKind) {
+      if (!hintShown && now - initAt > 6000) {
+        hintShown = true;
+        showContent(null, null, 'No subtitles detected yet \u2014 turn on captions (CC) in the player', cfg.trackLang || '');
+      }
+      return;
+    }
+
+    if (attachedKind !== 'dom' && attachedKind !== 'file' && !gotText && !fallbackTried && playing && now - attachedAt > 10000) {
+      fallbackTried = true;
+      const prev = attachedKind;
+      detachSource();
+      tryAttach(prev);
+    }
+  }
+
+  // ── Initialisation and main polling loop ─────────────────────────────────────────
   async function init(settings) {
     resetState();
     stopped = false;
@@ -970,6 +1605,9 @@ window.__subtitleTtsApi = (function () {
 
     videoEl = findVideo();
     if (!videoEl) return { success: false, error: 'no_video' };
+    initAt = Date.now();
+    hintShown = false; genericCache = null;
+    startResourceWatch();
 
     applyVideoVolume(true);
     ensureSubtitlesActive();
@@ -984,14 +1622,17 @@ window.__subtitleTtsApi = (function () {
       }
       
       const currentVideo = findVideo();
-      if (currentVideo && currentVideo !== videoEl) {
-        if (obs) { obs.disconnect(); obs = null; activeSel = null; observedNode = null; }
-        if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+      // Switch video target only if the current element disappears or a clearly larger one appears
+      const switchVideo = currentVideo && currentVideo !== videoEl &&
+        (!videoEl || !videoEl.isConnected || videoScore(currentVideo) > videoScore(videoEl) * 1.5);
+      if (switchVideo) {
+        detachSource();
         if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); }
         videoEl = currentVideo;
         if (videoEl) { videoEl.addEventListener('seeked', onSeeked); }
         applyVideoVolume(true);
         resetState();
+        initAt = Date.now(); hintShown = false; genericCache = null;
       } else {
         applyVideoVolume(false);
       }
@@ -999,6 +1640,7 @@ window.__subtitleTtsApi = (function () {
       if (!videoEl) return;
       ensureSubtitlesActive();
       attachSubtitles();
+      watchdog();
     }, 1000);
 
     return { success: true };
@@ -1012,11 +1654,17 @@ window.__subtitleTtsApi = (function () {
     if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); videoEl = null; }
     const s = document.getElementById('stts-hide-cc');
     if (s) s.remove();
+    restoreInlineHide();
+    stopFileDriver();
+    stopResourceWatch();
+    fileCands.clear(); fileTried.clear(); fileTracks = []; fileLoading = false;
     restoreCtrl();
     restoreVideoVolume();
     resetState();
     activeSel = null;
     observedNode = null;
+    attachedKind = '';
+    genericCache = null;
   }
 
   function stop() {
@@ -1041,6 +1689,10 @@ window.__subtitleTtsApi = (function () {
         return true;
       case 'SUBTITLE_TTS_DONE':
         onDone();
+        return false;
+      case 'SUBTITLE_TTS_DETACH':
+        _cleanup();
+        res({ success: true });
         return false;
       case 'STOP_SUBTITLE_TTS':
         stop();
@@ -1092,5 +1744,5 @@ window.__subtitleTtsApi = (function () {
   window.__stts_onMsg     = onMsg;
   window.__stts_onStorage = onStorageChange;
 
-  return { reinit: (s) => init(s), stop, _cleanup };
+  return { reinit: (s) => init(s), stop, _cleanup, probe, diagnose };
 })();

@@ -68,14 +68,16 @@ function getTab(tabId) {
   });
 }
 
-function sendMessageToTab(tabId, message) {
+function sendMessageToTab(tabId, message, options) {
   return new Promise((resolve) => {
     if (!tabId) { resolve(null); return; }
+    const cb = (response) => {
+      if (chrome.runtime.lastError) { resolve(null); return; }
+      resolve(response || null);
+    };
     try {
-      chrome.tabs.sendMessage(tabId, message, (response) => {
-        if (chrome.runtime.lastError) { resolve(null); return; }
-        resolve(response || null);
-      });
+      if (options) chrome.tabs.sendMessage(tabId, message, options, cb);
+      else chrome.tabs.sendMessage(tabId, message, cb);
     } catch (e) { resolve(null); }
   });
 }
@@ -90,6 +92,88 @@ function executeScriptInTab(tabId, file) {
       });
     } catch (e) { resolve(false); }
   });
+}
+
+// Injects subtitle_tts.js into all frames to support embedded players.
+// Falls back to the top frame if cross-frame injection is restricted.
+async function injectSubtitleTts(tabId) {
+  const allOk = await new Promise((resolve) => {
+    try {
+      chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["subtitle_tts.js"] }, () => {
+        resolve(!chrome.runtime.lastError);
+      });
+    } catch (e) { resolve(false); }
+  });
+  if (allOk) return { ok: true, allFrames: true };
+  const topOk = await executeScriptInTab(tabId, "subtitle_tts.js");
+  return { ok: topOk, allFrames: false };
+}
+
+// Queries all frames for media elements and returns their candidates with scores.
+function probeVideoFrames(tabId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => {
+          try { return (window.__subtitleTtsApi && window.__subtitleTtsApi.probe) ? window.__subtitleTtsApi.probe() : null; }
+          catch (e) { return null; }
+        }
+      }, (results) => {
+        if (chrome.runtime.lastError || !Array.isArray(results)) { resolve([]); return; }
+        resolve(results
+          .filter((r) => r && r.result && r.result.hasVideo)
+          .map((r) => ({ frameId: r.frameId, score: r.result.score || 0 })));
+      });
+    } catch (e) { resolve([]); }
+  });
+}
+
+// Restrict subtitle fetching to public URLs, blocking local or private network addresses.
+function isPrivateHost(host) {
+  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h || h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".lan")) return true;
+  if (/^(?:127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(h)) return true;
+  if (/^172\.(?:1[6-9]|2\d|3[01])\./.test(h)) return true;
+  if (h === "::1" || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)) return true;
+  return false;
+}
+
+// Monitors frame changes to follow dynamic players (e.g. iframes created upon playback).
+let frameFollowTimer = null;
+function stopFrameFollow() { if (frameFollowTimer) { clearInterval(frameFollowTimer); frameFollowTimer = null; } }
+function startFrameFollow(tabId, startFrameId, initMsg) {
+  stopFrameFollow();
+  let currentFrameId = startFrameId;
+  let ticks = 0;
+  frameFollowTimer = setInterval(async () => {
+    ticks++;
+    if (ticks > 40 || subtitleTabId !== tabId) { stopFrameFollow(); return; }
+    const found = await probeVideoFrames(tabId);
+    if (!found.length) return;
+    found.sort((a, b) => b.score - a.score);
+    const best = found[0];
+    const cur = found.find((f) => f.frameId === currentFrameId);
+    const curScore = cur ? cur.score : 0;
+    // Threshold to detect candidate frames whose video dimensions are still rendering
+    if (best.frameId !== currentFrameId && best.score >= 500 && best.score > curScore * 2) {
+      await sendMessageToTab(tabId, { type: "SUBTITLE_TTS_DETACH" }, { frameId: currentFrameId });
+      currentFrameId = best.frameId;
+      await sendMessageToTab(tabId, initMsg, { frameId: best.frameId });
+    }
+  }, 3000);
+}
+
+
+// Notifies the initiating frame that TTS playback has finished.
+function sendTtsDone(tabId, frameId, utteranceId) {
+  if (!tabId) return;
+  const msg = { type: "SUBTITLE_TTS_DONE", utteranceId };
+  const cb = () => { void chrome.runtime.lastError; };
+  try {
+    if (typeof frameId === "number") chrome.tabs.sendMessage(tabId, msg, { frameId }, cb);
+    else chrome.tabs.sendMessage(tabId, msg, cb);
+  } catch (e) {}
 }
 
 function removeChromeTab(tabId) {
@@ -500,10 +584,17 @@ async function startSubtitleTtsInternal(tabId) {
     }
   }
 
-  const injected = await executeScriptInTab(tabId, "subtitle_tts.js");
-  if (!injected) { setSubtitleTtsState(false); return { success: false, error: "Failed to inject subtitle_tts.js. Check that the page allows extensions." }; }
+  const inj = await injectSubtitleTts(tabId);
+  if (!inj.ok) { setSubtitleTtsState(false); return { success: false, error: "Failed to inject subtitle_tts.js. Check that the page allows extensions." }; }
 
   await delay(120);
+
+  // When injected across frames, select the target frame hosting the primary video
+  let targetFrameId = null;
+  if (inj.allFrames) {
+    const found = await probeVideoFrames(tabId);
+    if (found.length) targetFrameId = found.sort((a, b) => b.score - a.score)[0].frameId;
+  }
 
   const initMsg = {
     type: "SUBTITLE_TTS_INIT",
@@ -513,11 +604,14 @@ async function startSubtitleTtsInternal(tabId) {
       ttsSpeed: parseFloat(settings.ttsSpeed) || 1.0, playbackControl: settings.subtitlePlaybackControl || "pause",
       slowdownRate: parseFloat(settings.subtitleSlowdownRate) || 0.8, hideNativeSubtitles: settings.hideNativeSubtitles !== false,
       videoVolume: parseFloat(settings.subtitleVideoVolume || "1.0"),
-      subtitleTtsProfile: settings.subtitleTtsProfile || "balanced"
+      subtitleTtsProfile: settings.subtitleTtsProfile || "balanced",
+      ownDocOnly: targetFrameId !== null
     }
   };
 
-  const response = await sendMessageToTab(tabId, initMsg);
+  const response = targetFrameId !== null
+    ? await sendMessageToTab(tabId, initMsg, { frameId: targetFrameId })
+    : await sendMessageToTab(tabId, initMsg);
 
   if (!response || response.success === false) {
     setSubtitleTtsState(false);
@@ -529,10 +623,12 @@ async function startSubtitleTtsInternal(tabId) {
   }
 
   await setStorage({ subtitleSourceTabId: tabId });
+  if (inj.allFrames && targetFrameId !== null && response && response.success !== false) startFrameFollow(tabId, targetFrameId, initMsg);
   return { success: true };
 }
 
 async function stopSubtitleTtsInternal() {
+  stopFrameFollow();
   resetTranslationContext();
   const tabId = subtitleTabId || await getStorageValue("subtitleSourceTabId");
   try { chrome.tts.stop(); } catch (e) {}
@@ -644,11 +740,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "subtitleSpeak") {
       const text = normalizeText(message.text); const lang = message.lang || "";
       const rate = Number.parseFloat(message.ttsSpeed) || 1.0; const fromTabId = sender.tab?.id || subtitleTabId;
-      const utteranceId = message.utteranceId;
+      const utteranceId = message.utteranceId; const fromFrameId = sender.frameId;
       activeSubtitleUtteranceId++;
       const currentUtteranceId = activeSubtitleUtteranceId;
 
-      if (!text) { if (fromTabId) sendMessageToTab(fromTabId, { type: "SUBTITLE_TTS_DONE", utteranceId }); sendResponse({ success: true }); return false; }
+      if (!text) { if (fromTabId) sendTtsDone(fromTabId, fromFrameId, utteranceId); sendResponse({ success: true }); return false; }
       try { chrome.tts.stop(); } catch (e) {}
 
       const options = {
@@ -656,7 +752,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         onEvent: (event) => {
           if (currentUtteranceId !== activeSubtitleUtteranceId) return;
           if (event.type === "end") {
-            if (fromTabId) try { chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE", utteranceId }, () => { void chrome.runtime.lastError; }); } catch (e) {}
+            if (fromTabId) sendTtsDone(fromTabId, fromFrameId, utteranceId);
           }
         }
       };
@@ -664,7 +760,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const executeSpeak = () => {
         try { chrome.tts.speak(text, options); } catch (e) {
           console.error("subtitleSpeak TTS error:", e);
-          if (fromTabId && currentUtteranceId === activeSubtitleUtteranceId) try { chrome.tabs.sendMessage(fromTabId, { type: "SUBTITLE_TTS_DONE", utteranceId }, () => { void chrome.runtime.lastError; }); } catch (e2) {}
+          if (fromTabId && currentUtteranceId === activeSubtitleUtteranceId) sendTtsDone(fromTabId, fromFrameId, utteranceId);
         }
       };
 
@@ -686,6 +782,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true }); return true;
     }
     
+    if (message.action === "fetchSubtitleFile") {
+      (async () => {
+        try {
+          const url = String(message.url || "");
+          let host = "";
+          try { host = new URL(url).hostname; } catch (e) {}
+          if (!/^https?:\/\//i.test(url) || isPrivateHost(host)) { sendResponse({ ok: false, error: "blocked" }); return; }
+          const ctl = new AbortController();
+          const tm = setTimeout(() => ctl.abort(), 10000);
+          const r = await fetch(url, { signal: ctl.signal, credentials: "omit", redirect: "follow" });
+          clearTimeout(tm);
+          if (!r.ok) { sendResponse({ ok: false, status: r.status }); return; }
+          const text = await r.text();
+          if (text.length > 4000000) { sendResponse({ ok: false, error: "too_large" }); return; }
+          sendResponse({ ok: true, text });
+        } catch (e) { sendResponse({ ok: false, error: String(e && e.message || e) }); }
+      })();
+      return true;
+    }
+
     if (message.action === "startSubtitleTts") {
       const tabId = message.tabId;
       if (!tabId) { sendResponse({ success: false, error: "No tab ID provided" }); return false; }

@@ -301,8 +301,9 @@ input[type="range"] {
   cursor: pointer;
 }
 
-#ttsSpeedValue {
-  min-width: 48px;
+#ttsSpeedValue,
+#wl_ttsSpeedValue {
+  min-width: 54px;
   padding: 4px 8px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -312,6 +313,7 @@ input[type="range"] {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   font-weight: 700;
+  flex-shrink: 0;
 }
 
 #connectionStatus {

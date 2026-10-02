@@ -30,6 +30,7 @@ if (window.__audioTranscriptionOverlayApi) {
     const MANIFEST_VERSION = chrome.runtime.getManifest?.()?.version || "";
     const CONTAINER_STYLE = (style) => `
       position:fixed;
+      box-sizing:border-box;
       top:${style.top};
       left:${style.left};
       width:${style.width};
@@ -566,13 +567,85 @@ if (window.__audioTranscriptionOverlayApi) {
       return normalizeText(segArray.map((s) => s?.text || "").join(" "));
     }
 
-    function saveWindowStyle() {
+    // ── Window positioning and geometry ──────────────────────────────────
+    // Stored as fractional viewport coordinates to ensure the overlay
+    // stays properly positioned and clamped across varying displays and zoom levels.
+    const WIN_MIN_W = 280, WIN_MIN_H = 140;
+    let windowUserTouched = false;
+
+    function getViewportSize() {
+      const de = document.documentElement;
+      return {
+        w: Math.max(200, de.clientWidth || window.innerWidth || 0),
+        h: Math.max(200, de.clientHeight || window.innerHeight || 0)
+      };
+    }
+
+    function clampWindowRect(r) {
+      const vp = getViewportSize();
+      const w = Math.round(Math.min(Math.max(r.width,  Math.min(WIN_MIN_W, vp.w)), vp.w));
+      const h = Math.round(Math.min(Math.max(r.height, Math.min(WIN_MIN_H, vp.h)), vp.h));
+      const left = Math.round(Math.min(Math.max(r.left, 0), vp.w - w));
+      const top  = Math.round(Math.min(Math.max(r.top,  0), vp.h - h));
+      return { left, top, width: w, height: h };
+    }
+
+    function defaultWindowRect() {
+      const vp = getViewportSize();
+      const w = Math.min(820, Math.floor(vp.w * 0.78));
+      const h = Math.min(320, Math.floor(vp.h * 0.55));
+      return clampWindowRect({
+        left: Math.floor((vp.w - w) / 2),
+        top: Math.floor(vp.h - h - 48),
+        width: w, height: h
+      });
+    }
+
+    function applyWindowRect(r) {
       if (!containerElement) return;
-      setSetting("windowStyle", {
-        top: containerElement.style.top, 
-        left: containerElement.style.left,
-        width: containerElement.style.width, 
-        height: containerElement.style.height
+      const c = clampWindowRect(r);
+      containerElement.style.left = c.left + "px";
+      containerElement.style.top = c.top + "px";
+      containerElement.style.width = c.width + "px";
+      containerElement.style.height = c.height + "px";
+    }
+
+    // Parses saved window rectangle (fractional or pixel format), returning clamped bounds
+    function parseSavedWindowRect(s) {
+      if (!s || typeof s !== "object") return null;
+      const vp = getViewportSize();
+      if (s.v === 2) {
+        const f = [s.x, s.y, s.w, s.h].map(Number);
+        if (!f.every(Number.isFinite) || f[2] <= 0 || f[3] <= 0) return null;
+        return clampWindowRect({ left: f[0] * vp.w, top: f[1] * vp.h, width: f[2] * vp.w, height: f[3] * vp.h });
+      }
+      const p = [s.left, s.top, s.width, s.height].map((v) => parseFloat(v));
+      if (!p.every(Number.isFinite)) return null;
+      // Discard invalid dimensions below minimum thresholds and fall back to defaults
+      if (p[2] < WIN_MIN_W || p[3] < WIN_MIN_H) return null;
+      return clampWindowRect({ left: p[0], top: p[1], width: p[2], height: p[3] });
+    }
+
+    function saveWindowStyle() {
+      // Persist layout only after manual user repositioning or resizing
+      if (!containerElement || !windowUserTouched) return;
+      const vp = getViewportSize();
+      const r = containerElement.getBoundingClientRect();
+      const scale = containerElement.offsetWidth ? (r.width / containerElement.offsetWidth) : 1;
+      const w = containerElement.offsetWidth * (scale || 1);
+      const h = containerElement.offsetHeight * (scale || 1);
+      const c = clampWindowRect({ left: r.left, top: r.top, width: w, height: h });
+      setSetting("windowStyle", { v: 2, x: c.left / vp.w, y: c.top / vp.h, w: c.width / vp.w, h: c.height / vp.h });
+    }
+
+    let winResizeBound = false;
+    function bindWindowResizeClamp() {
+      if (winResizeBound) return;
+      winResizeBound = true;
+      window.addEventListener("resize", () => {
+        if (!containerElement || !containerElement.isConnected) return;
+        const r = containerElement.getBoundingClientRect();
+        applyWindowRect({ left: r.left, top: r.top, width: containerElement.offsetWidth, height: containerElement.offsetHeight });
       });
     }
 
@@ -1159,7 +1232,7 @@ if (window.__audioTranscriptionOverlayApi) {
           padding:16px 20px; min-width:260px; max-width:420px; box-shadow:0 16px 40px rgba(0,0,0,0.45);
           text-align:center; font-size:16px; line-height:1.4;
         `;
-        document.body.appendChild(waitPopupEl);
+        (document.documentElement || document.body).appendChild(waitPopupEl);
       }
       waitPopupEl.textContent = String(text || "").trim() || "Please wait...";
       waitPopupEl.style.display = "block";
@@ -1169,24 +1242,17 @@ if (window.__audioTranscriptionOverlayApi) {
     function createContainer() {
       containerElement = document.createElement("div");
       containerElement.id = "transcription";
-      const defaultWidth = Math.min(820, Math.floor(window.innerWidth * 0.78));
-      const defaultHeight = Math.min(320, Math.floor(window.innerHeight * 0.55));
-      const defaultStyle = {
-        top: `${Math.max(16, Math.floor(window.innerHeight - defaultHeight - 48))}px`,
-        left: `${Math.max(16, Math.floor((window.innerWidth - defaultWidth) / 2))}px`,
-        width: `${defaultWidth}px`,
-        height: `${defaultHeight}px`
-      };
-      containerElement.style.cssText = CONTAINER_STYLE(defaultStyle);
-      
+      const d = defaultWindowRect();
+      containerElement.style.cssText = CONTAINER_STYLE({
+        top: d.top + "px", left: d.left + "px", width: d.width + "px", height: d.height + "px"
+      });
+      windowUserTouched = false;
+
       chrome.storage.local.get(["windowStyle"], (data) => {
-        const s = data.windowStyle;
-        if (s?.top && s?.left && s?.width && s?.height) {
-          containerElement.style.top = s.top; 
-          containerElement.style.left = s.left;
-          containerElement.style.width = s.width; 
-          containerElement.style.height = s.height;
-        }
+        // If the user has already moved it while storage is loading, do not overwrite their position
+        if (windowUserTouched || !containerElement) return;
+        const r = parseSavedWindowRect(data && data.windowStyle);
+        if (r) applyWindowRect(r);
       });
     }
 
@@ -1276,35 +1342,46 @@ if (window.__audioTranscriptionOverlayApi) {
       containerElement.addEventListener("mousedown", (e) => {
         const tag = e.target?.tagName?.toLowerCase?.() || "";
         if (tag === "button" || e.target === dividerEl) return;
-        
+
         const rect = containerElement.getBoundingClientRect();
         const nearResizeCorner = rect.width - (e.clientX - rect.left) < 18 && rect.height - (e.clientY - rect.top) < 18;
+        windowUserTouched = true;          // Corner resize also marks layout as user-modified
         if (nearResizeCorner) return;
-        
-        x = e.clientX; 
+
+        x = e.clientX;
         y = e.clientY;
-        
+
         const onMove = (ev) => {
-          containerElement.style.top = `${Math.max(0, containerElement.offsetTop + (ev.clientY - y))}px`;
-          containerElement.style.left = `${Math.max(0, containerElement.offsetLeft + (ev.clientX - x))}px`;
-          x = ev.clientX; 
+          // Compensate for CSS transforms or page zoom scaling factors during drag
+          const r = containerElement.getBoundingClientRect();
+          const scale = containerElement.offsetWidth ? (r.width / containerElement.offsetWidth) || 1 : 1;
+          const curLeft = parseFloat(containerElement.style.left) || 0;
+          const curTop = parseFloat(containerElement.style.top) || 0;
+          applyWindowRect({
+            left: curLeft + (ev.clientX - x) / scale,
+            top: curTop + (ev.clientY - y) / scale,
+            width: containerElement.offsetWidth,
+            height: containerElement.offsetHeight
+          });
+          x = ev.clientX;
           y = ev.clientY;
         };
-        
-        const onUp = () => { 
-          document.removeEventListener("mousemove", onMove); 
-          document.removeEventListener("mouseup", onUp); 
-          debouncedSaveWindowStyle(); 
+
+        const onUp = () => {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          debouncedSaveWindowStyle();
         };
-        
-        document.addEventListener("mousemove", onMove); 
+
+        document.addEventListener("mousemove", onMove);
         document.addEventListener("mouseup", onUp);
       });
-      
+
       if (window.ResizeObserver) {
         resizeObserver = new ResizeObserver(() => debouncedSaveWindowStyle());
         resizeObserver.observe(containerElement);
       }
+      bindWindowResizeClamp();
     }
 
     function applySavedUiSettings() {
@@ -1359,7 +1436,9 @@ if (window.__audioTranscriptionOverlayApi) {
       createContentArea(); 
       configureControls(); 
       configureMovement();
-      document.body.appendChild(containerElement); 
+      // Attach to documentElement to avoid containing-block distortions
+      // from page-level CSS transforms, filters, or contain properties on document.body.
+      (document.documentElement || document.body).appendChild(containerElement);
       applySavedUiSettings();
     }
 
