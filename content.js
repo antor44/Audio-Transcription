@@ -25,9 +25,11 @@ if (window.__audioTranscriptionOverlayApi) {
     const TEXT_BLOCK_STYLE =
       "padding:0 16px 10px 16px;display:block;white-space:pre-wrap !important;word-break:break-word !important;line-height:1.5;";
     const BUTTON_STYLE =
-      "padding:2px 8px;cursor:pointer;background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.22);color:#fff;border-radius:6px;font-size:12px;font-weight:700;";
+      "padding:2px 8px;cursor:pointer;background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.22);color:#fff;border-radius:6px;font-family:inherit;font-size:12px;font-weight:700;";
 
     const MANIFEST_VERSION = chrome.runtime.getManifest?.()?.version || "";
+    // The overlay lives in the page DOM, so typography and scrollbar properties
+    // are declared explicitly to keep its appearance independent of host page styles.
     const CONTAINER_STYLE = (style) => `
       position:fixed;
       box-sizing:border-box;
@@ -46,6 +48,18 @@ if (window.__audioTranscriptionOverlayApi) {
       flex-direction:column;
       box-shadow:0 12px 28px rgba(0,0,0,0.45);
       backdrop-filter:blur(6px);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+      font-weight:400;
+      font-style:normal;
+      line-height:1.4;
+      letter-spacing:normal;
+      text-align:left;
+      text-transform:none;
+      text-indent:0;
+      direction:ltr;
+      color-scheme:dark;
+      scrollbar-width:thin;
+      scrollbar-color:rgba(148,163,184,0.55) transparent;
     `;
 
     let containerElement = null;
