@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Audio Transcription & Live Interpreter",
-  "version": "3.5.4",
+  "version": "3.6.0",
   "description": "Real-time transcription, live translation, and speech-to-speech playback for browser audio. Includes Subtitle TTS for videos.",
   "options_page": "options.html",
   "background": {
@@ -20,6 +20,10 @@
     "https://clients5.google.com/*",
     "https://www.youtube.com/*",
     "https://www.youtube-nocookie.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "icons": {
     "16": "icon16.png",

@@ -123,7 +123,7 @@ function probeVideoFrames(tabId) {
         if (chrome.runtime.lastError || !Array.isArray(results)) { resolve([]); return; }
         resolve(results
           .filter((r) => r && r.result && r.result.hasVideo)
-          .map((r) => ({ frameId: r.frameId, score: r.result.score || 0 })));
+          .map((r) => ({ frameId: r.frameId, score: r.result.score || 0, playing: !!r.result.playing })));
       });
     } catch (e) { resolve([]); }
   });
@@ -139,30 +139,76 @@ function isPrivateHost(host) {
   return false;
 }
 
-// Monitors frame changes to follow dynamic players (e.g. iframes created upon playback).
+// Monitors frame changes to follow dynamic players (e.g. iframes created or started upon playback).
+// Switches the active frame when a clearly better candidate appears: an actively playing video
+// replaces an idle one, and otherwise a candidate must be substantially larger.
 let frameFollowTimer = null;
+const FRAME_FOLLOW_INTERVAL_MS = 3000;
+const FRAME_FOLLOW_MAX_TICKS = 1200;
 function stopFrameFollow() { if (frameFollowTimer) { clearInterval(frameFollowTimer); frameFollowTimer = null; } }
 function startFrameFollow(tabId, startFrameId, initMsg) {
   stopFrameFollow();
   let currentFrameId = startFrameId;
   let ticks = 0;
+  let busy = false;
   frameFollowTimer = setInterval(async () => {
-    ticks++;
-    if (ticks > 40 || subtitleTabId !== tabId) { stopFrameFollow(); return; }
-    const found = await probeVideoFrames(tabId);
-    if (!found.length) return;
-    found.sort((a, b) => b.score - a.score);
-    const best = found[0];
-    const cur = found.find((f) => f.frameId === currentFrameId);
-    const curScore = cur ? cur.score : 0;
-    // Threshold to detect candidate frames whose video dimensions are still rendering
-    if (best.frameId !== currentFrameId && best.score >= 500 && best.score > curScore * 2) {
-      await sendMessageToTab(tabId, { type: "SUBTITLE_TTS_DETACH" }, { frameId: currentFrameId });
+    if (busy) return;
+    busy = true;
+    try {
+      ticks++;
+      if (ticks > FRAME_FOLLOW_MAX_TICKS || subtitleTabId !== tabId || !(await getTab(tabId))) { stopFrameFollow(); return; }
+      const found = await probeVideoFrames(tabId);
+      if (!found.length) return;
+      found.sort((a, b) => b.score - a.score);
+      const best = found[0];
+      const cur = found.find((f) => f.frameId === currentFrameId);
+      const curScore = cur ? cur.score : 0;
+      if (best.frameId === currentFrameId || best.score < 500) return;
+      const better = !cur || (best.playing && !cur.playing) || best.score > curScore * 2;
+      if (!better) return;
+      if (currentFrameId !== null) await sendMessageToTab(tabId, { type: "SUBTITLE_TTS_DETACH" }, { frameId: currentFrameId });
       currentFrameId = best.frameId;
-      await sendMessageToTab(tabId, initMsg, { frameId: best.frameId });
-    }
-  }, 3000);
+      await sendMessageToTab(tabId, { ...initMsg, settings: { ...initMsg.settings, ownDocOnly: true } }, { frameId: best.frameId });
+    } finally { busy = false; }
+  }, FRAME_FOLLOW_INTERVAL_MS);
 }
+
+// Collects a diagnostics snapshot from every frame of a tab (the active tab by default).
+// Each frame hosts its own subtitle_tts.js instance, so one snapshot per frame is needed to see
+// where a player lives. From the service worker console: await diagnoseSubtitleTts()
+// Pass { inject: true } to load the script first (this restarts a running Subtitle TTS session).
+async function diagnoseSubtitleTts(options = {}) {
+  let tabId = options.tabId;
+  if (!tabId) {
+    // Pick the most recently used web page tab; the inspector window itself is never a candidate
+    const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true }, (r) => resolve(r || [])));
+    const web = tabs.filter((t) => /^https?:/i.test(t.url || ""));
+    web.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+    tabId = web[0] && web[0].id;
+  }
+  if (!tabId) { console.warn("diagnoseSubtitleTts: no web page tab found; pass { tabId }"); return []; }
+  if (options.inject) await injectSubtitleTts(tabId);
+  const results = await new Promise((resolve) => {
+    try {
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => {
+          try {
+            const api = window.__subtitleTtsApi;
+            return api && api.diagnose ? api.diagnose() : { frame: location.href, isTop: window.top === window, api: false };
+          } catch (e) { return { frame: location.href, error: String(e && e.message || e) }; }
+        }
+      }, (res) => {
+        if (chrome.runtime.lastError) { console.warn("diagnoseSubtitleTts:", chrome.runtime.lastError.message); resolve([]); return; }
+        resolve(Array.isArray(res) ? res : []);
+      });
+    } catch (e) { console.warn("diagnoseSubtitleTts:", e && e.message || e); resolve([]); }
+  });
+  const out = results.map((r) => ({ tabId, frameId: r.frameId, ...r.result }));
+  console.log(JSON.stringify(out, null, 2));
+  return out;
+}
+self.diagnoseSubtitleTts = diagnoseSubtitleTts;
 
 
 // Notifies the initiating frame that TTS playback has finished.
@@ -589,10 +635,15 @@ async function startSubtitleTtsInternal(tabId) {
 
   await delay(120);
 
-  // When injected across frames, select the target frame hosting the primary video
+  // When injected across frames, select the target frame hosting the primary video.
+  // Players are sometimes created a moment after the page settles, so probe a few times.
   let targetFrameId = null;
   if (inj.allFrames) {
-    const found = await probeVideoFrames(tabId);
+    let found = await probeVideoFrames(tabId);
+    for (let attempt = 0; attempt < 6 && !found.length; attempt++) {
+      await delay(500);
+      found = await probeVideoFrames(tabId);
+    }
     if (found.length) targetFrameId = found.sort((a, b) => b.score - a.score)[0].frameId;
   }
 
@@ -846,6 +897,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     sendResponse({ success: false, error: "Unknown action" }); return false;
   } catch (e) { console.error("Runtime message error:", e); sendResponse({ success: false, error: e.message }); return false; }
+});
+
+// Resumes a Subtitle TTS start that was interrupted by a host permission prompt
+// (the prompt closes the popup before it can continue on its own).
+const PENDING_START_MAX_AGE_MS = 120000;
+chrome.permissions.onAdded.addListener(async () => {
+  try {
+    const { pendingSubtitleStart, isSubtitleTtsActive } = await getStorage(["pendingSubtitleStart", "isSubtitleTtsActive"]);
+    if (!pendingSubtitleStart) return;
+    await chrome.storage.local.remove("pendingSubtitleStart");
+    if (isSubtitleTtsActive || Date.now() - pendingSubtitleStart.ts > PENDING_START_MAX_AGE_MS) return;
+    if (!(await getTab(pendingSubtitleStart.tabId))) return;
+    await startSubtitleTtsInternal(pendingSubtitleStart.tabId);
+    // Reopen the popup so the user sees the active state (not available in every Chrome version)
+    try { await chrome.action.openPopup(); } catch (e) {}
+  } catch (e) { console.warn("Pending Subtitle TTS start failed:", e); }
 });
 
 chrome.runtime.onStartup.addListener(() => {

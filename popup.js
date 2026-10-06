@@ -372,9 +372,75 @@ function stopCapture(){
   chrome.runtime.sendMessage({action:'stopCapture'},(r)=>{ if(chrome.runtime.lastError||!r?.success) setStatus('Stop failed'); });
 }
 
+// Embedded players live in cross-origin frames that the extension cannot reach by default.
+// Finds large, video-shaped frames and asks for access to their origins only (must run from a user gesture).
+// Advertising frames and off-screen frames are skipped, frames with player hints (fullscreen/autoplay attributes
+// or player-like URLs) are ranked first, at most MAX_ORIGIN_PROMPTS origins are requested at once,
+// and origins already asked during this browser session are not asked again.
+// Returns true when a permission prompt was shown. The browser prompt takes focus and normally closes this
+// popup, so the caller stores a pending start that the service worker resumes once access is granted.
+const MAX_ORIGIN_PROMPTS=2;
+async function requestPlayerFrameAccess(tabId){
+  try{
+    const probe=()=>{
+      const AD_HOST=/doubleclick|googlesyndication|googleadservices|adsystem|adservice|adnxs|adsrvr|taboola|outbrain|criteo|pubmatic|rubiconproject|openx|smartadserver|teads|moatads|imasdk|advertis|(?:^|[.\-])ads?(?:[.\-]|$)/i;
+      const AD_ATTR=/aswift|google_ads|adframe|ad-frame|advert|(?:^|[\s_\-])ads?(?:$|[\s_\-\d])/i;
+      const PLAYER_URL=/player|embed|video|vod|stream|watch|media|live/i;
+      const out=[];
+      const vh=window.innerHeight||0;
+      for(const f of document.querySelectorAll('iframe')){
+        try{
+          const w=f.offsetWidth,h=f.offsetHeight,r=w/(h||1);
+          if(w<300||h<170||r<1.5||r>2.1) continue;
+          const u=new URL(f.src,location.href);
+          if(!/^https?:$/.test(u.protocol)||u.origin===location.origin) continue;
+          if(AD_HOST.test(u.hostname)) continue;
+          if(AD_ATTR.test((f.id||'')+' '+(f.title||'')+' '+(f.name||'')+' '+(f.getAttribute('class')||''))) continue;
+          const rect=f.getBoundingClientRect();
+          if(vh&&(rect.bottom<-vh||rect.top>vh*2)) continue;
+          const playerLike=f.hasAttribute('allowfullscreen')
+            ||/fullscreen|autoplay|encrypted-media|picture-in-picture/i.test(f.getAttribute('allow')||'')
+            ||PLAYER_URL.test(u.hostname+u.pathname);
+          out.push({origin:u.origin+'/*',area:w*h*(playerLike?3:1)});
+        }catch(e){}
+      }
+      return out;
+    };
+    let res;
+    try{ res=await chrome.scripting.executeScript({target:{tabId,allFrames:true},func:probe}); }
+    catch(e){ res=await chrome.scripting.executeScript({target:{tabId},func:probe}); }
+    const largest=new Map();
+    for(const r of res) for(const c of (r.result||[])) largest.set(c.origin,Math.max(largest.get(c.origin)||0,c.area));
+
+    const sess=chrome.storage.session;
+    const asked=sess?((await sess.get('askedPlayerOrigins')).askedPlayerOrigins||{}):{};
+    const missing=[];
+    for(const [o] of [...largest.entries()].sort((a,b)=>b[1]-a[1])){
+      if(asked[o]) continue;
+      if(!(await chrome.permissions.contains({origins:[o]}))) missing.push(o);
+      if(missing.length>=MAX_ORIGIN_PROMPTS) break;
+    }
+    if(missing.length){
+      // Recorded before the prompt: it normally closes the popup, so a refusal cannot be observed afterwards
+      if(sess){ for(const o of missing) asked[o]=Date.now(); await sess.set({askedPlayerOrigins:asked}); }
+      await chrome.permissions.request({origins:missing});
+    }
+    return missing.length>0;
+  }catch(e){}
+  return false;
+}
+
 async function startSubtitleTts(){
-  await saveSettings(); const tab=await getActiveTab();
+  const tab=await getActiveTab();
   if(!tab?.id){ setSubtitleStatus('No active tab'); return; }
+  // Settings are saved first because the popup may be closed by the permission prompt
+  await saveSettings();
+  await chrome.storage.local.set({ pendingSubtitleStart: { tabId: tab.id, ts: Date.now() } });
+  await requestPlayerFrameAccess(tab.id);
+  // If the popup survived the prompt, start here unless the service worker already took over
+  const pending = (await chrome.storage.local.get('pendingSubtitleStart')).pendingSubtitleStart;
+  if (!pending) return;
+  await chrome.storage.local.remove('pendingSubtitleStart');
   setSubtitleStatus('Starting...');
   chrome.runtime.sendMessage({action:'startSubtitleTts',tabId:tab.id},(r)=>{
     if(chrome.runtime.lastError||!r?.success){ setSubtitleButtonsFromState(false); setSubtitleStatus(r?.error||'Start failed'); return; }

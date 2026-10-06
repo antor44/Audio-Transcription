@@ -115,7 +115,6 @@ window.__subtitleTtsApi = (function () {
 
   let isSeeking = false;
   let seekCooldownTimer = null;
-  let _bmpSubtitleAttempted = false;
 
   // Detection state and diagnostics
   let detectedLang = '';
@@ -125,7 +124,10 @@ window.__subtitleTtsApi = (function () {
   let fallbackTried = false;
   let lastDomRecheck = 0;
   let initAt = 0;
-  let hintShown = false;
+  // Search notice stage: 0 = none, 1 = "looking for subtitles", 2 = "turn on captions" hint
+  let hintStage = 0;
+  let playedMs = 0;       // Accumulated playback time while no subtitle source is attached
+  let lastWatchAt = 0;
   let genericCache = null;
   const inlineHidden = new Map(); // element -> previous inline styles (for restoration)
 
@@ -275,6 +277,53 @@ window.__subtitleTtsApi = (function () {
   }
 
   // ── Ad detection: checks known player ad states to suppress TTS during ads ────────
+  // Generic fallback: many players show an "Ad" badge, an "Ad 1 of 2" counter or a "Skip ad" control over
+  // the video while an ad plays. Subtitle files loaded for the main video must not be read against the ad
+  // timeline, so text is ignored while such a label is visible. The scan is cached to stay cheap.
+  const AD_LABEL_RE = /^(?:ads?|advertisements?|sponsored|publicidad|anuncios?|publicit[\u00e9e]|werbung|anzeige|pubblicit[\u00e0a]|annuncio|publicidade)$|^(?:ad|ads|anuncio|publicidad|werbung)\s*[:\u00b7-]?\s*\d+\s*(?:of|de|von|sur|di)\s*\d+$|^skip\s+ads?$|^saltar\s+(?:el\s+)?anuncio$/i;
+  let adScan = { ts: 0, val: false };
+  let adWas = false;
+  let fileTimeOffset = 0;   // Seconds between video.currentTime and the start of the main video (see noteAdTransition)
+
+  // Some players keep one continuous media timeline after a pre-roll ad, so the main video starts at the
+  // ad's duration instead of 0, while subtitle files are timed from the start of the main video.
+  // The offset is measured when an ad ends, only before any subtitle text was delivered and only for
+  // plausible ad lengths, so mid-roll ads and players that reset the timeline are not affected.
+  function noteAdTransition(isAd) {
+    if (isAd === adWas) return;
+    adWas = isAd;
+    if (isAd || !videoEl) return;
+    const tEnd = videoEl.currentTime || 0;
+    if (!gotText && tEnd > 4 && tEnd < 120) fileTimeOffset = tEnd;
+  }
+
+  function hasAdOverlay() {
+    const now = Date.now();
+    if (now - adScan.ts < (adScan.val ? 250 : 1000)) return adScan.val;
+    let found = false;
+    try {
+      if (videoEl) {
+        const vr = videoEl.getBoundingClientRect();
+        let n = 0;
+        for (const el of getSearchRoot(videoEl).querySelectorAll('span, div, p, a, button')) {
+          if (++n > 1500) break;
+          if (el.childElementCount) continue;
+          const t = norm(el.textContent);
+          if (!t || t.length > 24 || !AD_LABEL_RE.test(t)) continue;
+          const r = el.getBoundingClientRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          if (!(r.width > 0 && r.height > 0 && cx >= vr.left && cx <= vr.right && cy >= vr.top && cy <= vr.bottom)) continue;
+          if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkVisibilityCSS: true })) continue;
+          found = true;
+          break;
+        }
+      }
+    } catch (e) {}
+    adScan = { ts: now, val: found };
+    noteAdTransition(found);
+    return found;
+  }
+
   function isAdPlaying() {
     if (window.location.hostname.includes('youtube.com')) {
       return !!document.querySelector('.ad-showing, .ad-interrupting, .ytp-ad-player-overlay');
@@ -286,7 +335,7 @@ window.__subtitleTtsApi = (function () {
     if (scope && (scope.classList.contains('vjs-ad-playing') || scope.classList.contains('ad-showing') || scope.querySelector('.bmpui-ui-ad-overlay'))) {
       return true;
     }
-    return false;
+    return hasAdOverlay();
   }
 
   function findAllMedia(root = document, ownOnly = cfg.ownDocOnly) {
@@ -328,11 +377,20 @@ window.__subtitleTtsApi = (function () {
     return all.reduce((b, v) => (!b || videoScore(v) > videoScore(b)) ? v : b, null);
   }
 
-  // Used by the service worker to select the best frame for initialisation
+  function isPlaying(v) {
+    return !!v && !v.paused && !v.ended && v.readyState >= 2;
+  }
+
+  // Used by the service worker to select the best frame for initialisation.
+  // An actively playing video outranks a paused one of similar size, so the frame that is
+  // really being watched wins even when other frames hold larger idle players.
   function probe() {
     const v = findVideo(true);
-    if (!v) return { hasVideo: false, score: 0, url: location.href };
-    return { hasVideo: true, score: videoScore(v) * ((!v.paused && !v.ended) ? 1.5 : 1), url: location.href };
+    if (!v) return { hasVideo: false, score: 0, playing: false, url: location.href };
+    const playing = isPlaying(v);
+    const hasCaptions = Array.from(v.textTracks || []).some(isSubtitleTrack);
+    const score = videoScore(v) * (playing ? 4 : 1) * (hasCaptions ? 1.25 : 1);
+    return { hasVideo: true, score, playing, url: location.href };
   }
 
   function isSubtitleTrack(t) { return t.kind === 'subtitles' || t.kind === 'captions'; }
@@ -360,6 +418,8 @@ window.__subtitleTtsApi = (function () {
       const pageLang = String(document.documentElement.lang || navigator.language || '').toLowerCase().split('-')[0];
       return (pageLang && ts.find(t => (t.language || '').toLowerCase().startsWith(pageLang)))
           || ts.find(t => t.cues && t.cues.length)
+          // In-band CEA-608/708 captions usually carry no language tag
+          || ts.find(t => t.language === '')
           || ts[0];
     }
     return null;
@@ -371,7 +431,10 @@ window.__subtitleTtsApi = (function () {
       return v.closest(
         '.video-js, .jwplayer, .plyr, .bmpui-ui-uicontainer, ' +
         '.theoplayer-container, [class*="theoplayer" i], ' +
-        '[class*="player-wrapper" i], [class*="player-container" i]'
+        '[class*="player-wrapper" i], [class*="player-container" i], ' +
+        // Common commercial player containers
+        '[class*="bitmovin" i], [class*="anvato" i], ' +
+        '[class*="video-wrapper" i], [class*="media-player" i]'
       ) || null;
     } catch (e) { return null; }
   }
@@ -392,10 +455,12 @@ window.__subtitleTtsApi = (function () {
     { c: '.ytp-caption-window-container',                               t: '.ytp-caption-segment' },
     // Twitch
     { c: '.player-captions-container__caption-window',                  t: '.player-captions-container__caption-line' },
-    // Deutsche Welle & Video.js: ONLY .vjs-text-track-cue
+    // Video.js
     { c: '.vjs-text-track-display',                                     t: '.vjs-text-track-cue' },
-    // 3Cat & Bitmovin: ONLY .bmpui-ui-subtitle-label
+    // Bitmovin
     { c: '.bmpui-ui-subtitle-overlay, .bmpui-subtitle-region-container', t: '.bmpui-ui-subtitle-label' },
+    // Bitmovin: alternate region/label structures
+    { c: '.bmpui-ui-subtitle-overlay',                                  t: '.bmpui-ui-subtitle-label, span' },
     // JW Player
     { c: '.jw-captions, .jw-text-track-display',                        t: '.jw-text-track-cue' },
     // Plyr
@@ -582,19 +647,21 @@ window.__subtitleTtsApi = (function () {
     } catch (e) { return document; }
   }
 
-  function scanGeneric() {
-    if (!videoEl) return [];
+  function scanGeneric(target) {
+    const v = target || videoEl;
+    if (!v) return [];
+    const cacheable = v === videoEl;
     const now = Date.now();
     const interval = (now - initAt > 30000) ? 8000 : 2500;
-    if (genericCache && now - genericCache.ts < interval) return genericCache.list;
+    if (cacheable && genericCache && now - genericCache.ts < interval) return genericCache.list;
 
     let list = [];
     try {
-      const vr = videoEl.getBoundingClientRect();
+      const vr = v.getBoundingClientRect();
       const seen = new Set();
 
       const evaluate = (el, needText) => {
-        if (seen.has(el) || el === videoEl) return;
+        if (seen.has(el) || el === v) return;
         seen.add(el);
         if (GEN_BAD_TAG.has(String(el.tagName).toUpperCase())) return;
         const cls = (el.getAttribute('class') || '') + ' ' + (el.id || '');
@@ -630,7 +697,7 @@ window.__subtitleTtsApi = (function () {
       };
 
       // 1) search within the player container
-      for (const el of deepQueryAll(getSearchRoot(videoEl), '[class], [id]')) evaluate(el, false);
+      for (const el of deepQueryAll(getSearchRoot(v), '[class], [id]')) evaluate(el, false);
       // 2) if nothing found with text, broaden to any element with text overlapping the video
       if (!list.some(c => c.text) && document.body) {
         for (const el of deepQueryAll(document.body, '[class], [id]')) evaluate(el, true);
@@ -641,7 +708,7 @@ window.__subtitleTtsApi = (function () {
       list.sort((a, b) => b.score - a.score);
     } catch (e) { list = []; }
 
-    genericCache = { ts: now, list };
+    if (cacheable) genericCache = { ts: now, list };
     return list;
   }
 
@@ -677,23 +744,38 @@ window.__subtitleTtsApi = (function () {
     inlineHidden.clear();
   }
 
-  // Returns a diagnostics snapshot — call window.__subtitleTtsApi.diagnose() in the extension context
+  // Returns a diagnostics snapshot of this frame. Each frame has its own instance, so a complete
+  // picture requires one snapshot per frame (see diagnoseSubtitleTts in the service worker).
   function diagnose() {
-    const out = { frame: location.href, isTop: window.top === window, attached: attachedKind || 'none', gotText, videos: [], knownDom: null, generic: [] };
+    const out = { frame: location.href, isTop: window.top === window, api: true, active: !stopped && !!videoEl, attached: attachedKind || 'none', gotText, videos: [], knownDom: null, generic: [] };
+    // Inspect the active video, or the best candidate in this document when not initialised yet
+    const target = videoEl || findVideo(true);
     try {
-      out.videos = findAllMedia(document).map(v => ({
-        w: v.offsetWidth, h: v.offsetHeight, paused: v.paused, muted: v.muted,
+      out.videos = findAllMedia(document, true).map(v => ({
+        w: v.offsetWidth, h: v.offsetHeight, paused: v.paused, muted: v.muted, rs: v.readyState,
+        t: Math.round(v.currentTime || 0), main: v === target,
         src: String(v.currentSrc || v.src || '').slice(0, 90),
-        tracks: Array.from(v.textTracks || []).map(t => ({ kind: t.kind, lang: t.language, label: t.label, mode: t.mode, cues: t.cues ? t.cues.length : null }))
+        tracks: Array.from(v.textTracks || []).map(t => ({ kind: t.kind, lang: t.language, label: t.label, mode: t.mode, cues: t.cues ? t.cues.length : null, active: t.activeCues ? t.activeCues.length : null }))
       }));
     } catch (e) {}
-    try { const sel = findDom(); out.knownDom = sel ? sel.c : null; } catch (e) {}
     try {
-      out.generic = scanGeneric().slice(0, 6).map(c => ({ tag: c.el.tagName, cls: c.cls.trim().slice(0, 100), text: c.text.slice(0, 60), score: c.score }));
+      const prev = videoEl;
+      if (!videoEl) videoEl = target;
+      try { const sel = findDom(); out.knownDom = sel ? sel.c : null; } finally { videoEl = prev; }
+    } catch (e) {}
+    try {
+      out.generic = scanGeneric(target).slice(0, 6).map(c => ({ tag: c.el.tagName, cls: c.cls.trim().slice(0, 100), text: c.text.slice(0, 60), score: c.score }));
     } catch (e) {}
 
     // Subtitle files detected via network resource timing and their load status
     out.fileCandidates = Array.from(fileCands.keys()).slice(-8).map(u => u.slice(0, 140));
+    try {
+      if (fileTrack && videoEl) {
+        const ft = videoEl.currentTime - fileTimeOffset;
+        const cue = fileTrack.cues.find(c => ft >= c.s && ft < c.e);
+        out.fileSync = { videoTime: Math.round(videoEl.currentTime * 10) / 10, offset: Math.round(fileTimeOffset * 10) / 10, duration: Math.round(videoEl.duration || 0), ad: adWas, cueStart: cue ? cue.s : null, cueText: cue ? cue.text.slice(0, 60) : null };
+      }
+    } catch (e) {}
     out.fileTracks = fileTracks.map(t => ({ url: t.url.slice(0, 100), cues: t.cues.length, lang: t.lang }));
     // Iframes present on the page (the player may reside in a child frame)
     try {
@@ -711,12 +793,12 @@ window.__subtitleTtsApi = (function () {
     } catch (e) {}
     // Short visible text nodes overlapping the video, regardless of class names
     try {
-      if (videoEl) {
-        const vr = videoEl.getBoundingClientRect();
+      if (target) {
+        const vr = target.getBoundingClientRect();
         const found = [];
-        for (const el of deepQueryAll(getSearchRoot(videoEl), '*').slice(0, 4000)) {
+        for (const el of deepQueryAll(getSearchRoot(target), '*').slice(0, 4000)) {
           if (found.length >= 10) break;
-          if (el === videoEl || GEN_BAD_TAG.has(String(el.tagName).toUpperCase())) continue;
+          if (el === target || GEN_BAD_TAG.has(String(el.tagName).toUpperCase())) continue;
           let own = '';
           for (const n of el.childNodes) if (n.nodeType === 3) own += n.nodeValue;
           own = norm(own);
@@ -969,6 +1051,8 @@ window.__subtitleTtsApi = (function () {
     obs = new MutationObserver(onMutation);
     obs.observe(c, { childList: true, subtree: true, characterData: true });
     if (sel.generic || (c.getRootNode && c.getRootNode() !== document)) applyInlineHide();
+    // Read any caption that is already on screen when the source is attached
+    setTimeout(() => { if (!stopped && obs && observedNode === c) onMutation(); }, 0);
     return true;
   }
 
@@ -1180,39 +1264,60 @@ window.__subtitleTtsApi = (function () {
   }
 
   // ── Subtitle activation: programmatically enables CC in known player UIs ──────────
+  // Clicks are bounded per video so the extension never keeps competing with the player or the
+  // viewer once captions have been switched on (or deliberately off).
+  const MAX_ACTIVATION_CLICKS = 4;
+  let activationClicks = 0;
+
+  function activate(el) {
+    if (activationClicks >= MAX_ACTIVATION_CLICKS) return false;
+    activationClicks++;
+    el.click();
+    return true;
+  }
+
+  function hasShowingCaptionTrack() {
+    try {
+      return !!videoEl && Array.from(videoEl.textTracks || []).some(t => isSubtitleTrack(t) && t.mode === 'showing');
+    } catch (e) { return false; }
+  }
+
   function ensureSubtitlesActive() {
+    if (activationClicks >= MAX_ACTIVATION_CLICKS) return;
     try {
       const ytCc = document.querySelector('.ytp-subtitles-button');
-      if (ytCc && ytCc.getAttribute('aria-pressed') === 'false') {
-        ytCc.click();
-      }
+      if (ytCc && ytCc.getAttribute('aria-pressed') === 'false' && activate(ytCc)) return;
 
       const twitchCc = document.querySelector('[data-a-target="player-subtitles-button"]');
-      if (twitchCc && twitchCc.getAttribute('aria-checked') === 'false') {
-        twitchCc.click();
+      if (twitchCc && twitchCc.getAttribute('aria-checked') === 'false' && activate(twitchCc)) return;
+
+      // Bitmovin subtitle toggle — only until the first subtitle text has been received
+      if (!gotText) {
+        const bmpCc = document.querySelector(
+          '.bmpui-ui-subtitlesettingstogglebutton.bmpui-off, ' +
+          '.bmpui-ui-subtitlelistbox .bmpui-ui-listitem:first-child'
+        );
+        if (bmpCc && activate(bmpCc)) return;
       }
 
-      if (!_bmpSubtitleAttempted && !lastSeenText) {
-        const bmpCc = document.querySelector('.bmpui-ui-subtitlesettingstogglebutton.bmpui-off');
-        if (bmpCc) { bmpCc.click(); _bmpSubtitleAttempted = true; }
-      }
-
+      // Video.js caption menus: choose an entry only while captions are off, i.e. when no
+      // regular (non-"off", non-settings) entry is selected and no text track is showing.
+      if (hasShowingCaptionTrack()) return;
       const vjsScope = getPlayerScope(videoEl) || document;
       const vjsMenuItems = vjsScope.querySelectorAll(
         '.vjs-subs-caps-button .vjs-menu-item, ' +
         '.vjs-subtitles-button .vjs-menu-item, ' +
         '.vjs-captions-button .vjs-menu-item'
       );
+      const usable = [];
+      let anySelected = false;
       for (const item of vjsMenuItems) {
         const txt = (item.textContent || '').toLowerCase().trim();
-        const isOff = /off|desactiv|deaktiv|none|disabled/i.test(txt);
-        const isSettings = /setting|configura|einstellung/i.test(txt);
-        const isSelected = item.classList.contains('vjs-selected') || item.getAttribute('aria-checked') === 'true';
-        if (!isOff && !isSettings && !isSelected) {
-          item.click();
-          break;
-        }
+        if (/off|desactiv|deaktiv|none|disabled/i.test(txt) || /setting|configura|einstellung/i.test(txt)) continue;
+        usable.push(item);
+        if (item.classList.contains('vjs-selected') || item.getAttribute('aria-checked') === 'true') anySelected = true;
       }
+      if (usable.length && !anySelected) activate(usable[0]);
     } catch(e) {}
   }
 
@@ -1230,7 +1335,8 @@ window.__subtitleTtsApi = (function () {
             .vjs-text-track-display, .plyr__captions,
             .shaka-text-container, .player-captions-container__caption-window,
             .player-timedtext, .dmp_subtitles, .mejs__captions-layer,
-            .theoplayer-texttracks, [class*="theoplayer-webvtt-styling"] {
+            .theoplayer-texttracks, [class*="theoplayer-webvtt-styling"],
+            .bmpui-ui-subtitle-overlay {
               opacity: 0.01 !important;
               pointer-events: none !important;
             }
@@ -1407,7 +1513,8 @@ window.__subtitleTtsApi = (function () {
 
   function onFileTick() {
     if (stopped || !fileTrack || !videoEl || isSeeking) return;
-    const t = videoEl.currentTime + 0.05;
+    if (isAdPlaying()) return;   // Also refreshes the timeline offset when a pre-roll ends
+    const t = videoEl.currentTime - fileTimeOffset + 0.05;
     const active = [];
     for (const c of fileTrack.cues) {
       if (c.s > t) break;
@@ -1478,10 +1585,29 @@ window.__subtitleTtsApi = (function () {
     if (pick && pick !== fileTrack) attachFileTrack(pick);
   }
 
+  // Original mode of a track that was promoted by the extension (restored when the source is released)
+  let promotedTrack = null;
+  let promotedPrevMode = '';
+
+  function restoreTrackMode() {
+    if (promotedTrack) {
+      try { if (promotedTrack.mode === 'showing') promotedTrack.mode = promotedPrevMode; } catch (e) {}
+    }
+    promotedTrack = null;
+    promotedPrevMode = '';
+  }
+
   function attachTrack(t) {
     activeTrack = t;
     cfg.trackLang = activeTrack.language || '';
-    if (activeTrack.mode === 'disabled') activeTrack.mode = 'hidden';
+    // Disabled tracks do not populate cues (e.g. Bitmovin and CEA-608 HLS players), so they are
+    // switched to 'showing'; the native overlay is suppressed by the stts-hide-cc stylesheet.
+    // Tracks already 'showing' or 'hidden' are left untouched.
+    if (activeTrack.mode === 'disabled') {
+      promotedTrack = activeTrack;
+      promotedPrevMode = 'disabled';
+      activeTrack.mode = 'showing';
+    }
     activeTrack.addEventListener('cuechange', onCueChange);
   }
 
@@ -1489,6 +1615,7 @@ window.__subtitleTtsApi = (function () {
     stopFileDriver();
     if (obs) { obs.disconnect(); obs = null; }
     if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+    restoreTrackMode();
     restoreInlineHide();
     activeSel = null;
     observedNode = null;
@@ -1546,6 +1673,76 @@ window.__subtitleTtsApi = (function () {
     }
   }
 
+  // ── Last-resort overlay detection ─────────────────────────────────────────────────
+  // Some players draw captions as plain DOM text with unpredictable class names. This sampler
+  // watches short text blocks in the lower part of the video and adopts one only after its text
+  // has changed several times in a way that looks like speech rather than player chrome.
+  const OVERLAY_INTERACTIVE = 'button, a[href], input, select, textarea, label, [role="button"], [role="menu"], [role="menuitem"], [role="slider"], [role="dialog"]';
+  const OVERLAY_NOISE_RE = /\b\d{1,2}:\d{2}\b|^\W*(?:ads?|advertisement|publicidad|anuncio|skip|saltar|live|en\s+directo|en\s+vivo|up next|next|share|compartir)\b|cookie|privacy|consent|subscribe|volume|fullscreen/i;
+  const OVERLAY_MIN_CHANGES = 4;
+  const overlayStats = new Map();   // structural signature -> { texts: Set, el }
+  let lastOverlayScan = 0;
+
+  function overlayTextOk(t) {
+    if (t.length < 3 || t.length > 240) return false;
+    if (!/\p{L}{2,}/u.test(t) || OVERLAY_NOISE_RE.test(t) || SKIP.test(t)) return false;
+    return isSpacelessScript(t) || splitWords(t).length >= 2;
+  }
+
+  // Widest ancestor that still looks like a caption window (small, no controls, no video)
+  function overlayAnchor(el, root, vr) {
+    let best = el;
+    let cur = el.parentElement;
+    for (let i = 0; cur && i < 4 && cur !== root; i++) {
+      const r = cur.getBoundingClientRect();
+      if (r.width > vr.width * 1.02 || r.height > vr.height * 0.6) break;
+      if (cur.querySelector('video, ' + OVERLAY_INTERACTIVE)) break;
+      best = cur;
+      cur = cur.parentElement;
+    }
+    return best;
+  }
+
+  function sniffOverlay() {
+    if (!videoEl) return null;
+    const vr = videoEl.getBoundingClientRect();
+    if (!(vr.width > 120 && vr.height > 80)) return null;
+    const root = getSearchRoot(videoEl);
+    let winner = null;
+    const seen = new Set();
+    for (const el of deepQueryAll(root, '*').slice(0, 3000)) {
+      if (el === videoEl || GEN_BAD_TAG.has(String(el.tagName).toUpperCase())) continue;
+      let own = '';
+      for (const n of el.childNodes) if (n.nodeType === 3) own += n.nodeValue;
+      own = norm(own);
+      if (!overlayTextOk(own)) continue;
+      const cls = (el.getAttribute('class') || '') + ' ' + (el.id || '');
+      if (GEN_EXCLUDE_RE.test(cls) || GEN_BAD_ROLE.test(el.getAttribute('role') || '')) continue;
+      if (el.closest(OVERLAY_INTERACTIVE)) continue;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (!(r.width > 0 && r.height > 0 && cx >= vr.left && cx <= vr.right && cy >= vr.top + vr.height * 0.4 && cy <= vr.bottom)) continue;
+      if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkVisibilityCSS: true })) continue;
+
+      const anchor = overlayAnchor(el, root, vr);
+      if (seen.has(anchor)) continue;
+      seen.add(anchor);
+      const text = collectText(anchor);
+      if (!overlayTextOk(text)) continue;
+
+      // Players may recreate the node for every cue, so statistics are keyed by position and class
+      const ar = anchor.getBoundingClientRect();
+      const sig = anchor.tagName + '|' + String(anchor.getAttribute('class') || '') + '|' + Math.round(((ar.top - vr.top) / vr.height) * 10);
+      let st = overlayStats.get(sig);
+      if (!st) overlayStats.set(sig, st = { texts: new Set(), el: anchor });
+      st.el = anchor;
+      st.texts.add(text);
+      if (st.texts.size >= OVERLAY_MIN_CHANGES && (!winner || st.texts.size > winner.n)) winner = { el: anchor, n: st.texts.size };
+    }
+    if (overlayStats.size > 40) overlayStats.clear();
+    return winner ? winner.el : null;
+  }
+
   // Watchdog: tries file-based sources when live playback produces no text,
   // falls back to alternative sources if the current one stays silent,
   // and shows a hint when no subtitle source is found.
@@ -1553,6 +1750,8 @@ window.__subtitleTtsApi = (function () {
     if (stopped || !videoEl) return;
     const now = Date.now();
     const playing = !videoEl.paused && !videoEl.ended;
+    if (playing && lastWatchAt && !isAdPlaying()) playedMs += Math.min(now - lastWatchAt, 2000);
+    lastWatchAt = now;
 
     // Try loading any newly discovered subtitle files
     if (!fileLoading && hasUntriedFiles()) {
@@ -1571,15 +1770,48 @@ window.__subtitleTtsApi = (function () {
       }
     }
 
+    // A known container stays silent while a text track is delivering cues: follow the track instead
+    if (attachedKind === 'dom' && !gotText && playing && now - attachedAt > 5000) {
+      const t = findTrack(videoEl);
+      if (t && (t.mode === 'showing' || t.mode === 'hidden') && t.activeCues && t.activeCues.length) {
+        detachSource();
+        resetState();
+        attachTrack(t);
+        attachedKind = 'track';
+        attachedAt = now;
+        onCueChange();
+      }
+    }
+
+    // Last resort: nothing has produced text yet while the video plays
+    if (!gotText && playing && now - initAt > 8000 && attachedKind !== 'file' &&
+        now - lastOverlayScan >= ((now - initAt > 60000) ? 3000 : 1000)) {
+      lastOverlayScan = now;
+      const el = sniffOverlay();
+      if (el && el !== observedNode) {
+        detachSource();
+        resetState();
+        if (startObs({ generic: true, container: el, root: null, c: null, t: null })) {
+          attachedKind = 'generic';
+          attachedAt = now;
+        }
+      }
+    }
+
     if (!attachedKind) {
-      if (!hintShown && now - initAt > 6000) {
-        hintShown = true;
-        showContent(null, null, 'No subtitles detected yet \u2014 turn on captions (CC) in the player', cfg.trackLang || '');
+      // Some players only expose their subtitle tracks once playback has started, so the
+      // captions hint is shown only after the video has played for a while without any source.
+      if (hintStage < 1 && now - initAt > 3000) {
+        hintStage = 1;
+        showContent(null, null, 'Looking for subtitles\u2026', cfg.trackLang || '');
+      } else if (hintStage < 2 && playedMs > 25000 && !fileLoading && !hasUntriedFiles()) {
+        hintStage = 2;
+        showContent(null, null, 'No subtitles detected \u2014 turn on captions (CC) in the player', cfg.trackLang || '');
       }
       return;
     }
 
-    if (attachedKind !== 'dom' && attachedKind !== 'file' && !gotText && !fallbackTried && playing && now - attachedAt > 10000) {
+    if (attachedKind !== 'dom' && attachedKind !== 'file' && !gotText && !fallbackTried && playing && now - attachedAt > 6000) {
       fallbackTried = true;
       const prev = attachedKind;
       detachSource();
@@ -1606,7 +1838,7 @@ window.__subtitleTtsApi = (function () {
     videoEl = findVideo();
     if (!videoEl) return { success: false, error: 'no_video' };
     initAt = Date.now();
-    hintShown = false; genericCache = null;
+    hintStage = 0; playedMs = 0; lastWatchAt = 0; fileTimeOffset = 0; adWas = false; genericCache = null; activationClicks = 0; overlayStats.clear();
     startResourceWatch();
 
     applyVideoVolume(true);
@@ -1632,7 +1864,7 @@ window.__subtitleTtsApi = (function () {
         if (videoEl) { videoEl.addEventListener('seeked', onSeeked); }
         applyVideoVolume(true);
         resetState();
-        initAt = Date.now(); hintShown = false; genericCache = null;
+        initAt = Date.now(); hintStage = 0; playedMs = 0; lastWatchAt = 0; fileTimeOffset = 0; adWas = false; genericCache = null; activationClicks = 0; overlayStats.clear();
       } else {
         applyVideoVolume(false);
       }
@@ -1651,6 +1883,7 @@ window.__subtitleTtsApi = (function () {
     if (bgSearch) { clearInterval(bgSearch); bgSearch = null; }
     if (obs) { obs.disconnect(); obs = null; }
     if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
+    restoreTrackMode();
     if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); videoEl = null; }
     const s = document.getElementById('stts-hide-cc');
     if (s) s.remove();
@@ -1665,6 +1898,7 @@ window.__subtitleTtsApi = (function () {
     observedNode = null;
     attachedKind = '';
     genericCache = null;
+    overlayStats.clear();
   }
 
   function stop() {
