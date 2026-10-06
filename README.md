@@ -4,6 +4,22 @@ A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-t
 
 Designed with privacy and efficiency in mind, it is optimized to run smoothly on low-resource computers and operates as independently from cloud services as possible. Compatible with Linux, Windows, and macOS, this extension acts as a true **Live Interpreter** for any media stream.
 
+✨ Key Features:
+
+• 🎬 Subtitle TTS Mode (Most Convenient): The fastest and easiest option. It reads aloud and translates existing subtitles from supported HTML5 video players directly in your browser. It requires the video to have a supported subtitle track, but it works completely out-of-the-box with no local server required.
+
+• 📝 Live Audio Transcription (The Ultimate Solution): The definitive fallback for absolutely any scenario. When a video has no subtitles—or Subtitle TTS cannot capture them—this mode transcribes the raw audio from scratch using your local machine's processing power and OpenAI's Whisper AI (Requires running a local WhisperLive server).
+
+• 🌐 Source Language Control: Rely on smart auto-detection, or manually select the subtitle language for maximum accuracy.
+
+• 🗣️ Real-Time Speech-to-Speech: Listen to live translations with a natural, fluid voice that buffers complete sentences for a seamless experience.
+
+• 🤖 Instant Translation: Translate live text using Google Translate (free) or the best Gemini and Gemma models for translation via a free or very cheap Google Gemini API key.
+
+• 🖼️ Flexible UI Modes: View transcripts in a floating overlay or a dedicated Standalone popup window.
+
+• 🛡️ Total Privacy: Local audio processing and transparent open-source code.
+
 ---
 ## 🌐 Universal Real-Time Compatibility
 
