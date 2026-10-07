@@ -38,7 +38,7 @@ As a result, occasional edge cases may occur on particular websites, languages, 
 ---
 ## 🛡️ Privacy & Permissions
 
-To respect user privacy and adhere to the principle of minimal privileges, this extension avoids demanding `<all_urls>` access upon installation. Instead, when you attempt to use the extension on cross-origin embedded iframes (e.g., watching a YouTube video embedded inside a news article), Chrome will utilize `optional_host_permissions` to dynamically ask for your consent to access that specific player only when you click "Start". 
+To respect user privacy and adhere to the principle of minimal privileges, this extension avoids demanding `<all_urls>` access upon installation. Instead, when you attempt to use the extension on cross-origin embedded iframes (e.g., watching a Dailymotion video embedded inside a news article), Chrome will utilize `optional_host_permissions` to dynamically ask for your consent to access that specific player only when you click "Start". 
 
 ---
 ## 📥 Download & Installation
