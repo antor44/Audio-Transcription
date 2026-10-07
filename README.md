@@ -33,7 +33,7 @@ The extension does not pre-download subtitle files such as `.vtt` or `.srt`, eve
 
 As a result, occasional edge cases may occur on particular websites, languages, or subtitle formats. The extension is continuously refined to improve compatibility and reliability across different environments.
 
-📺🌍 **Massive Platform Support:** Tested and verified on **YouTube, Twitch, BBC, 3Cat, DW, France 24, NHK World, RTVE Play, Sky News, ABC News (AU/US), NBC, CBS, MS NOW, Fox News, CNN, and Euronews**. Supports Bitmovin, THEOplayer, Video.js, and JW Player architectures.
+📺🌍 **Massive Platform Support:** Tested and verified on **YouTube, Twitch, Dailymotion, BBC, 3Cat, DW, France 24, NHK World, RTVE Play, Sky News, ABC News (AU/US), NBC, CBS, MS NOW, Fox News, CNN, and Euronews**. Supports Bitmovin, THEOplayer, Video.js, and JW Player architectures.
 
 ---
 ## 🛡️ Privacy & Permissions
