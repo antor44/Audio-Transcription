@@ -42,6 +42,7 @@ window.__subtitleTtsApi = (function () {
           MAX_COMMITTED   : 500,
           T_PUNCT         : 200, 
           T_FALLBACK      : 2000,
+          MAX_WAIT        : 4000,
           S_OVERFLOW_W    : 20,
           S_OVERFLOW_BACK : 10,
           MIN_FRAG        : 2, 
@@ -55,6 +56,7 @@ window.__subtitleTtsApi = (function () {
           MAX_COMMITTED   : 500,
           T_PUNCT         : 700,
           T_FALLBACK      : 8000,
+          MAX_WAIT        : 12000,
           S_OVERFLOW_W    : 35,
           S_OVERFLOW_BACK : 25,
           MIN_FRAG        : 6, 
@@ -68,6 +70,7 @@ window.__subtitleTtsApi = (function () {
           MAX_COMMITTED   : 500,
           T_PUNCT         : 400,
           T_FALLBACK      : 4000,
+          MAX_WAIT        : 6000,
           S_OVERFLOW_W    : 25,
           S_OVERFLOW_BACK : 15,
           MIN_FRAG        : 4, 
@@ -104,6 +107,56 @@ window.__subtitleTtsApi = (function () {
   function isFacebookHost() {
     const h = window.location.hostname || '';
     return h === 'www.facebook.com' || h.endsWith('.facebook.com') || h === 'fb.watch' || h.endsWith('.fb.watch');
+  }
+
+  function isTwitchHost() {
+    const h = window.location.hostname || '';
+    return h === 'twitch.tv' || h.endsWith('.twitch.tv');
+  }
+
+  // Sites that remove and recreate their caption container between cues or at the end of a video.
+  // On these hosts a vanished container commits the buffered words and keeps the queued speech,
+  // so no trailing words are lost. Every other site keeps the plain reset.
+  function keepsSpeechOnSourceLoss() {
+    return isFacebookHost() || isTwitchHost();
+  }
+
+  // Sentence-ending punctuation, optionally followed by combining marks and closing quotes/brackets.
+  const RE_SENT_PUNCT = /[.!?:\u2026\u3002\uFF01\uFF1F\u061F\u0964\u0965;\u061B\uFF1B]\p{M}*["'\])}\u00bb\u201D\u2019]*$/u;
+
+  // True when the recent caption stream carries no sentence punctuation at all (lyrics, auto
+  // captions without punctuation). Needs a minimum amount of evidence, so until enough words
+  // have been seen the standard punctuation-driven assembly stays in charge.
+  function streamLooksPlain() {
+    const recent = committedWords.concat(pendingWords).slice(-20);
+    if (recent.length < 12) return false;
+    return !recent.some(w => RE_SENT_PUNCT.test(w));
+  }
+
+  // Arabic-script captions (Arabic, Persian, Urdu) very often come without sentence punctuation,
+  // so waiting for punctuation or for the word limit makes the speech lag far behind the video.
+  const RE_ARABIC_SCRIPT = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+  function streamIsArabicScript() {
+    const recent = committedWords.concat(pendingWords).slice(-12);
+    if (!recent.length) return false;
+    const hits = recent.filter(w => RE_ARABIC_SCRIPT.test(w)).length;
+    return hits * 2 >= recent.length;
+  }
+
+  // Longest an Arabic-script caption buffer may wait before being flushed, independent of the
+  // selected sentence-build profile.
+  const ARABIC_MAX_WAIT_MS = 6000;
+
+  // Time-based flushing applies to hosts that show short, line-by-line captions without
+  // punctuation (such as song lyrics), where it only runs while the captions really carry no
+  // punctuation, and to Arabic-script captions. Every other case uses the standard sentence
+  // assembly.
+  function relaxedFlushActive() {
+    return isTwitchHost() ? streamLooksPlain() : streamIsArabicScript();
+  }
+
+  function relaxedMaxWait() {
+    return isTwitchHost() ? P.MAX_WAIT : ARABIC_MAX_WAIT_MS;
   }
 
   // Facebook-only generation counter, bumped on every video/source reset so in-flight async
@@ -145,7 +198,6 @@ window.__subtitleTtsApi = (function () {
   let playedMs = 0;       // Accumulated ad-free playback time since the video was attached
   let sawText = false;    // True once the current video has produced caption text (suppresses search hints)
   let pendingSince = 0;   // Timestamp at which the current word buffer started filling
-  const MAX_PENDING_MS = 6000; // Longest a continuously updating caption buffer may wait before being flushed
   let lastWatchAt = 0;
   let genericCache = null;
   const inlineHidden = new Map(); // element -> previous inline styles (for restoration)
@@ -161,9 +213,7 @@ window.__subtitleTtsApi = (function () {
     // Facebook/Reels: a loop reset surfaces as a seek back to 0 without an ended event. Treat it
     // like a natural end so the pending speech is drained instead of being discarded.
     if (isFacebookHost() && videoEl && videoEl.currentTime < 1) {
-      endedNaturally = true;
-      endGraceUntil = 0;
-      if (!isSeeking) fbkMarkEnd();
+      fbkOnRewind();
       lastSeenText = '';
       clearTimeout(debTimer);
       clearTimeout(silenceTimer);
@@ -306,14 +356,16 @@ window.__subtitleTtsApi = (function () {
   }
 
   // ── Word accumulator: merges overlapping or extending caption chunks ──────────────
-  function mergeCues(pending, incoming) {
+  // allowTruncate: when false, an incoming chunk that is a shorter prefix of the buffer is kept as
+  // a separate caption instead of being treated as a revision that cuts the buffered words.
+  function mergeCues(pending, incoming, allowTruncate = true) {
     if (!pending.length) return incoming;
     if (!incoming.length) return pending;
     
     const normP = pending.map(nw);
     const normI = incoming.map(nw);
 
-    if (incoming.length <= pending.length) {
+    if (allowTruncate && incoming.length <= pending.length) {
       let isPrefix = true;
       for (let i = 0; i < incoming.length; i++) {
         if (normI[i] !== normP[i]) { isPrefix = false; break; }
@@ -885,6 +937,9 @@ window.__subtitleTtsApi = (function () {
 
   // ── Main text accumulator: processes incoming subtitle text into the word buffer ──
   function accumulateText(rawText) {
+    // Close the previous pass first if the video just restarted, so the first caption of the new
+    // pass is never merged with the tail of the old one.
+    if (!stopped && isFacebookHost()) fbkOnRewind();
     if (stopped || isSeeking || isAdPlaying()) return;
 
     const clean = cleanSubtitle(rawText || '');
@@ -922,12 +977,18 @@ window.__subtitleTtsApi = (function () {
 
     const allWords = splitWords(clean);
 
-    if (!isProgressiveMode && prevText) {
+    // A very short caption that only repeats the beginning of the previous one (for example
+    // "Hello Harry" followed by "Hello") is a new caption, not a revision of the previous text.
+    // Only prefix matches of three or more words indicate a growing or retracting caption.
+    // Streams already known to be rolling or progressive keep the revision handling.
+    let newShortCaption = false;
+    if (prevText && !isProgressiveMode) {
       const lastWords = splitWords(prevText);
+      const shrank = allWords.length < lastWords.length &&
+                     allWords.every((w, i) => nw(w) === nw(lastWords[i]));
+      newShortCaption = shrank && allWords.length < 3;
       const overlap = committedPrefixLength(lastWords, allWords, true);
-      const isSubset = lastWords.every((w, i) => nw(w) === nw(allWords[i])) ||
-                       allWords.every((w, i) => nw(w) === nw(lastWords[i]));
-      if (overlap >= 3 || isSubset) {
+      if (overlap >= 3 || (shrank && !newShortCaption)) {
         isProgressiveMode = true;
       }
     }
@@ -935,7 +996,7 @@ window.__subtitleTtsApi = (function () {
     const skipCommitted = committedPrefixLength(committedWords, allWords, false);
     const fresh = allWords.slice(skipCommitted);
 
-    pendingWords = mergeCues(pendingWords, fresh);
+    pendingWords = mergeCues(pendingWords, fresh, !newShortCaption);
     if (pendingWords.length && !pendingSince) pendingSince = Date.now();
 
     evaluateCommit();
@@ -1020,9 +1081,10 @@ window.__subtitleTtsApi = (function () {
     }
 
     // Rolling captions that update continuously keep resetting the debounce timers, so the buffer
-    // would otherwise grow until the hard limit. Cap how long a sentence may wait.
-    if (!isTextTrackMode && pendingSince && pendingWords.length >= P.MIN_WORDS_PUNCT &&
-        Date.now() - pendingSince > MAX_PENDING_MS) {
+    // would otherwise grow until the hard limit. Cap how long a sentence may wait on the hosts
+    // and scripts that need it.
+    if (relaxedFlushActive() && !isTextTrackMode && pendingSince && pendingWords.length >= P.MIN_WORDS_PUNCT &&
+        Date.now() - pendingSince > relaxedMaxWait()) {
       forceFlushPending();
       return;
     }
@@ -1061,8 +1123,8 @@ window.__subtitleTtsApi = (function () {
       committedWords = [...committedWords, ...sentence];
       if (committedWords.length > P.MAX_COMMITTED) committedWords = committedWords.slice(-P.MAX_COMMITTED);
       commitText(text);
-    } else if (!isTextTrackMode && wc >= P.MIN_FRAG) {
-      // Unpunctuated text (for example song lyrics) that has stopped updating: speak it as is
+    } else if (relaxedFlushActive() && !isTextTrackMode && wc >= P.MIN_FRAG) {
+      // Text without a sentence boundary that has stopped updating: speak it as is
       forceFlushPending();
     }
   }
@@ -1380,6 +1442,36 @@ window.__subtitleTtsApi = (function () {
     return rewound;
   }
 
+  // Classifies a jump back in time of the main video and reacts to it:
+  //  - the previous position was at the very end: a natural end or a loop. The buffered words are
+  //    committed and the speech queue is carried over, so the ending is still read out.
+  //  - otherwise, a restart from the beginning means another video started on the same element
+  //    (the viewer scrolled): its speech is cut and all state of the previous video is discarded.
+  //  - any other jump back is an ordinary seek and is left to the seek handler.
+  // It runs both from the polling loop and before each caption is processed, so the previous
+  // pass is always closed before the first caption of the next pass is buffered.
+  function fbkOnRewind() {
+    if (!isFacebookHost() || !videoEl) return;
+    const prev = fbkLastTime;
+    if (!fbkTimeRewound()) return;
+    let now = 0, dur = NaN;
+    try { now = videoEl.currentTime; dur = videoEl.duration; } catch (e) {}
+    const nearEnd = !isFinite(dur) || dur <= 0 || prev >= dur - 2.5;
+    if (nearEnd) {
+      if (!endedNaturally) {
+        endedNaturally = true;
+        endGraceUntil = 0;
+        fbkMarkEnd();
+      }
+    } else if (now < 1.5) {
+      stopSpeechNow();
+      resetState(false);
+      endedNaturally = false;
+      endGraceUntil = 0;
+      fbkEndedAt = 0;
+    }
+  }
+
   // A switch to another video within this window after a natural end (or loop restart) keeps the
   // queued speech instead of cutting it; a switch outside the window is treated as a manual skip.
   const END_CARRY_MS = 3500;
@@ -1387,6 +1479,23 @@ window.__subtitleTtsApi = (function () {
 
   function fbkRecentEnd() {
     return fbkEndedAt > 0 && (Date.now() - fbkEndedAt) < END_CARRY_MS;
+  }
+
+  // When speech is carried over to the next video, only the last few queued items are kept so a
+  // backlog from the previous video does not keep playing over the new one.
+  const CARRY_MAX_ITEMS = 2;
+  function trimCarriedQueue() {
+    if (cueQueue.length > CARRY_MAX_ITEMS) cueQueue = cueQueue.slice(-CARRY_MAX_ITEMS);
+  }
+
+  // Cuts the utterance that is currently being spoken. Used when the viewer moves to another
+  // video on their own, so speech from the previous video does not play over the new one.
+  function stopSpeechNow() {
+    try {
+      if (chrome.runtime?.id) {
+        chrome.runtime.sendMessage({ action: 'stopTts', isSeek: true }, () => void chrome.runtime.lastError);
+      }
+    } catch (e) {}
   }
 
   // Marks the end of the current video and commits every buffered word, including a trailing
@@ -1422,8 +1531,10 @@ window.__subtitleTtsApi = (function () {
   // Runs the full "switch to a new video" reset: releases every attached source, clears all
   // accumulated state and discards any stale subtitle-file work for the previous video.
   function fbkTransitionReset() {
+    // The buffer was already committed when the end was marked, so anything buffered now arrived
+    // after the end (for example the first caption of a restarted loop) and must not be spoken.
     const keepSpeech = fbkRecentEnd();
-    if (keepSpeech && pendingWords.length > 0) forceFlushPending();
+    if (keepSpeech) trimCarriedQueue(); else stopSpeechNow();
     detachSource();
     resetState(keepSpeech);
     if (!keepSpeech) bumpGeneration();
@@ -2050,17 +2161,23 @@ window.__subtitleTtsApi = (function () {
     } else if (obs) {
       // Use isConnected rather than document.body.contains to handle shadow DOM roots
       if (!observedNode || !observedNode.isConnected) {
-        // The caption block left the page (for example when a video ends): commit what is
-        // buffered and keep the queued speech so the ending is still read out.
-        // Some players remove and recreate the caption block between cues, so buffered words are
-        // committed, queued speech is kept, and the dedupe and language state survive the swap.
-        if (pendingWords.length > 0) forceFlushPending();
-        const keptWords = committedWords, keptLang = detectedLang, keptTrackLang = cfg.trackLang;
-        detachSource();
-        resetState(true);
-        committedWords = keptWords;
-        detectedLang = keptLang;
-        cfg.trackLang = keptTrackLang;
+        if (keepsSpeechOnSourceLoss()) {
+          // The caption block left the page (for example when a video ends): commit what is
+          // buffered and keep the queued speech so the ending is still read out. Some players
+          // recreate the caption block between cues, so the dedupe and language state survive too.
+          // Right after an end or loop marker the buffer only holds the restarted pass, so it is dropped.
+          if (pendingWords.length > 0 && !(isFacebookHost() && fbkRecentEnd())) forceFlushPending();
+          const keptWords = committedWords, keptLang = detectedLang, keptTrackLang = cfg.trackLang;
+          detachSource();
+          resetState(true);
+          committedWords = keptWords;
+          detectedLang = keptLang;
+          cfg.trackLang = keptTrackLang;
+        } else {
+          // Elsewhere a vanished container means the source is gone: rebuild from a clean state.
+          detachSource();
+          resetState();
+        }
       }
     }
   }
@@ -2270,13 +2387,9 @@ window.__subtitleTtsApi = (function () {
           (!videoEl || !videoEl.isConnected || picked === currentVideo);
 
         // The main video rewinding (Reels loop or a new video reusing the element) is the
-        // reliable signal when src is empty. It is treated as a natural end: buffered words are
-        // committed and the speech queue is kept, exactly like an ended event.
-        if (fbkTimeRewound() && !endedNaturally) {
-          endedNaturally = true;
-          endGraceUntil = 0;
-          fbkMarkEnd();
-        }
+        // reliable signal when src is empty. It is classified as a natural end/loop or as a
+        // new video, and handled accordingly.
+        fbkOnRewind();
 
         // A source change is caught here and again by the load/emptied handler; whichever runs
         // first performs the reset.
@@ -2304,8 +2417,10 @@ window.__subtitleTtsApi = (function () {
       if (switchVideo) {
         // A switch right after the previous video ended on its own keeps the queued speech so the
         // ending is still read out; any other switch is treated as a skip and cuts it.
+        // The ending was already committed when the end was marked; words buffered since then
+        // belong to the restarted pass, so they are discarded instead of spoken over the new video.
         const keepSpeech = isFacebookHost() && fbkRecentEnd();
-        if (keepSpeech && pendingWords.length > 0) forceFlushPending();
+        if (keepSpeech) trimCarriedQueue(); else if (isFacebookHost()) stopSpeechNow();
         detachSource();
         if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); videoEl.removeEventListener('ended', onEnded); }
         videoEl = currentVideo;
