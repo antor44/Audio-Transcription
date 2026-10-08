@@ -1,4 +1,4 @@
-# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.6.0)
+# Audio Transcription for Chrome/Chromium/Microsoft Edge (v3.6.2)
 
 A browser extension (Chrome/Chromium/Edge) that turns your browser into a real-time interpreter. It captures any audio playing in a tab (transcribing it via a local Whisper AI server) or reads existing video subtitles, translates them live, and reads the results back to you via Text-to-Speech (TTS) on the fly. 
 
@@ -33,7 +33,7 @@ The extension does not pre-download subtitle files such as `.vtt` or `.srt`, eve
 
 As a result, occasional edge cases may occur on particular websites, languages, or subtitle formats. The extension is continuously refined to improve compatibility and reliability across different environments.
 
-📺🌍 **Massive Platform Support:** Tested and verified across a wide range of platforms, including **YouTube, Twitch, Dailymotion, PeerTube instances (such as TILvids, GNU/Linux Tube, and XR Tube), BBC, 3Cat, DW, France 24, NHK World, RTVE Play, Sky News, ABC News (AU/US), NBC, CBS, MS NOW (formerly MSNBC), Fox News, CNN, Euronews, among others**. Compatible with player architectures such as Bitmovin, THEOplayer, Video.js, and JW Player.
+📺🌍 **Massive Platform Support:** Tested and verified across a wide range of platforms, including **YouTube, Twitch, Facebook, Facebook Reels, Dailymotion, PeerTube instances (such as TILvids, GNU/Linux Tube, and XR Tube), BBC, 3Cat, DW, France 24, NHK World, RTVE Play, Sky News, ABC News (AU/US), NBC, CBS, MS NOW (formerly MSNBC), Fox News, CNN, Euronews, among others**. Compatible with player architectures such as Bitmovin, THEOplayer, Video.js, and JW Player.
 
 ---
 ## 🛡️ Privacy & Permissions
