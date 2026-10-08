@@ -99,6 +99,17 @@ window.__subtitleTtsApi = (function () {
     return words.join(' ');
   }
 
+  // Facebook pages recycle DOM containers across videos, so stale subtitles from a previous
+  // video can leak into the current one. Facebook-only behaviour is gated behind this check.
+  function isFacebookHost() {
+    const h = window.location.hostname || '';
+    return h === 'www.facebook.com' || h.endsWith('.facebook.com') || h === 'fb.watch' || h.endsWith('.fb.watch');
+  }
+
+  // Facebook-only generation counter, bumped on every video/source reset so in-flight async
+  // work from a previous generation cannot attach tracks or speak stale text.
+  let gen = 0;
+
   let videoEl = null, activeTrack = null, obs = null, activeSel = null, observedNode = null;
   let isSpeaking = false, isTtsSpeaking = false;
   let cueQueue = [], recentTrans = [];
@@ -115,6 +126,11 @@ window.__subtitleTtsApi = (function () {
 
   let isSeeking = false;
   let seekCooldownTimer = null;
+  // Set when the playing video reaches its end on its own (rather than the user skipping).
+  // While pending speech from that video still exists, the switch to the next video is deferred
+  // briefly so the ending is read out instead of being cut off.
+  let endedNaturally = false;
+  let endGraceUntil = 0;      // defer switch until this timestamp to let pending speech drain
 
   // Detection state and diagnostics
   let detectedLang = '';
@@ -126,7 +142,10 @@ window.__subtitleTtsApi = (function () {
   let initAt = 0;
   // Search notice stage: 0 = none, 1 = "looking for subtitles", 2 = "turn on captions" hint
   let hintStage = 0;
-  let playedMs = 0;       // Accumulated playback time while no subtitle source is attached
+  let playedMs = 0;       // Accumulated ad-free playback time since the video was attached
+  let sawText = false;    // True once the current video has produced caption text (suppresses search hints)
+  let pendingSince = 0;   // Timestamp at which the current word buffer started filling
+  const MAX_PENDING_MS = 6000; // Longest a continuously updating caption buffer may wait before being flushed
   let lastWatchAt = 0;
   let genericCache = null;
   const inlineHidden = new Map(); // element -> previous inline styles (for restoration)
@@ -139,6 +158,30 @@ window.__subtitleTtsApi = (function () {
 
   // ── Seek handler: resets in-flight state without discarding committed history ───
   function onSeeked() {
+    // Facebook/Reels: a loop reset surfaces as a seek back to 0 without an ended event. Treat it
+    // like a natural end so the pending speech is drained instead of being discarded.
+    if (isFacebookHost() && videoEl && videoEl.currentTime < 1) {
+      endedNaturally = true;
+      endGraceUntil = 0;
+      if (!isSeeking) fbkMarkEnd();
+      lastSeenText = '';
+      clearTimeout(debTimer);
+      clearTimeout(silenceTimer);
+      isSeeking = false;
+      return;
+    }
+    // A fresh video restarted after the previous one ended on its own: keep queued speech and
+    // skip the stale-text cooldown so the new video's first lines are not dropped.
+    const restarted = endedNaturally && (!videoEl || videoEl.currentTime < 1);
+    if (restarted) {
+      pendingWords = [];
+      lastSeenText = '';
+      clearTimeout(debTimer);
+      clearTimeout(silenceTimer);
+      isSeeking = false;
+      return;
+    }
+    endedNaturally = false;
     isSeeking = true;
     cueQueue = [];
     recentTrans = [];
@@ -157,6 +200,27 @@ window.__subtitleTtsApi = (function () {
 
     clearTimeout(seekCooldownTimer);
     seekCooldownTimer = setTimeout(() => { isSeeking = false; }, 400);
+  }
+
+  // ── Natural-end handler: marks that playback finished on its own, so the pending queue is
+  // drained for a short while before any auto-advance to the next video is processed.
+  function onEnded() {
+    if (stopped) return;
+    // Some sites (notably Facebook) leave <video>.src empty, so the source-change check below
+    // cannot rely on it. The ended event on the active video is the reliable signal here.
+    if (handleFbkNaturalEnd()) return;
+    endedNaturally = true;
+    endGraceUntil = 0;
+  }
+
+  // Facebook/Reels: when the main video ends on its own (or a Reel loops back to 0), the
+  // buffered words are committed and the speech queue is carried over to the next video.
+  function handleFbkNaturalEnd() {
+    if (!isFacebookHost()) return false;
+    endedNaturally = true;
+    endGraceUntil = 0;
+    if (!isSeeking) fbkMarkEnd();
+    return true;
   }
 
   let cfg = {
@@ -454,7 +518,7 @@ window.__subtitleTtsApi = (function () {
     // YouTube
     { c: '.ytp-caption-window-container',                               t: '.ytp-caption-segment' },
     // Twitch
-    { c: '.player-captions-container__caption-window',                  t: '.player-captions-container__caption-line' },
+    { c: '.player-captions-container, .player-captions-container__caption-window', t: '.player-captions-container__caption-line' },
     // Video.js
     { c: '.vjs-text-track-display',                                     t: '.vjs-text-track-cue' },
     // Bitmovin
@@ -532,6 +596,11 @@ window.__subtitleTtsApi = (function () {
     try {
       const container = observedNode;
 
+      if (activeSel.facebook) {
+        const gt = fbkReadCaptions(container);
+        return SKIP.test(gt) ? '' : gt;
+      }
+
       if (activeSel.generic) {
         const gt = collectText(container);
         return SKIP.test(gt) ? '' : gt;
@@ -548,9 +617,9 @@ window.__subtitleTtsApi = (function () {
         if (ss.length) {
           const parts = [];
           for (const s of ss) {
-            // Ignore YouTube's top notification window and screen reader elements
+            // Ignore player notifications and screen reader elements. Caption windows are NOT
+            // filtered by position: embedded broadcast captions are often anchored to the top.
             if (s.closest && (
-              s.closest('.ytp-caption-window-top') ||
               s.closest('.ytp-bezel') ||
               s.closest('.ytp-visually-hidden') ||
               s.closest('.ytp-caption-window-header')
@@ -574,7 +643,7 @@ window.__subtitleTtsApi = (function () {
 
       // Container fallback
       const clone = container.cloneNode(true);
-      const hidden = clone.querySelectorAll('.ytp-caption-window-top, ' + PURGE);
+      const hidden = clone.querySelectorAll(PURGE);
       hidden.forEach(el => el.remove());
       const res = norm(clone.textContent);
       return SKIP.test(res) ? '' : res;
@@ -843,6 +912,7 @@ window.__subtitleTtsApi = (function () {
     }
 
     gotText = true;
+    sawText = true;
     const prevText = lastSeenText;
     if (clean === lastSeenText) return;
     lastSeenText = clean;
@@ -866,6 +936,7 @@ window.__subtitleTtsApi = (function () {
     const fresh = allWords.slice(skipCommitted);
 
     pendingWords = mergeCues(pendingWords, fresh);
+    if (pendingWords.length && !pendingSince) pendingSince = Date.now();
 
     evaluateCommit();
   }
@@ -948,6 +1019,14 @@ window.__subtitleTtsApi = (function () {
       }
     }
 
+    // Rolling captions that update continuously keep resetting the debounce timers, so the buffer
+    // would otherwise grow until the hard limit. Cap how long a sentence may wait.
+    if (!isTextTrackMode && pendingSince && pendingWords.length >= P.MIN_WORDS_PUNCT &&
+        Date.now() - pendingSince > MAX_PENDING_MS) {
+      forceFlushPending();
+      return;
+    }
+
     if (pendingWords.length >= P.HARD_COMMIT) {
       forceFlushPending();
     }
@@ -982,6 +1061,9 @@ window.__subtitleTtsApi = (function () {
       committedWords = [...committedWords, ...sentence];
       if (committedWords.length > P.MAX_COMMITTED) committedWords = committedWords.slice(-P.MAX_COMMITTED);
       commitText(text);
+    } else if (!isTextTrackMode && wc >= P.MIN_FRAG) {
+      // Unpunctuated text (for example song lyrics) that has stopped updating: speak it as is
+      forceFlushPending();
     }
   }
 
@@ -1133,6 +1215,7 @@ window.__subtitleTtsApi = (function () {
 
   // ── Commit: validates and enqueues text for playback ─────────────────────────────
   function commitText(text) {
+    pendingSince = pendingWords.length ? Date.now() : 0;
     const t = norm(text);
     if (skip(t)) return;
 
@@ -1160,6 +1243,9 @@ window.__subtitleTtsApi = (function () {
     const item = cueQueue.shift();
     if (!item) return;
 
+    // Facebook-only: capture the generation so stale queue work from a previous video is dropped.
+    const startGen = gen;
+
     isSpeaking = true;
     syncVideoSpeed();
 
@@ -1171,6 +1257,8 @@ window.__subtitleTtsApi = (function () {
           new Promise(resolve => chrome.runtime.sendMessage({ action: 'detectTextLanguage', text: item.text }, resolve)),
           new Promise(resolve => setTimeout(() => resolve(null), 1000))
         ]);
+        // Facebook-only: a reset happened during detection; leave the new generation's state untouched.
+        if (isFacebookHost() && gen !== startGen) return;
         if (res && res.language && res.language !== 'und') {
           detectedLang = res.language.toLowerCase().split('-')[0];
           currentSrcLang = detectedLang;
@@ -1196,6 +1284,8 @@ window.__subtitleTtsApi = (function () {
               restoreCtrl();
               return;
             }
+            // Facebook-only: a reset happened during translation; drop the stale result.
+            if (isFacebookHost() && gen !== startGen) return;
             
             const rawData = norm(r?.data || '');
             const cleanTr = rawData.replace(/^\u207A\s*/, '');
@@ -1230,6 +1320,8 @@ window.__subtitleTtsApi = (function () {
         );
       }
     } else {
+      // Facebook-only: a reset happened after detection; drop the stale item before speaking.
+      if (isFacebookHost() && gen !== startGen) return;
       showContent(item.text, '', '', currentSrcLang);
       if (cfg.enableTts) {
         isTtsSpeaking = true;
@@ -1241,20 +1333,291 @@ window.__subtitleTtsApi = (function () {
     }
   }
 
-  function resetState() {
+  // Facebook-only: bump the generation and discard cached subtitle-file discovery state so
+  // stale work and file candidates from a previous video cannot leak into the current one.
+  function bumpGeneration() {
+    if (!isFacebookHost()) return;
+    gen++;
+    fileCands.clear();
+    fileTried.clear();
+    fileTracks = [];
+    fileTrack = null;
+    fileLoading = false;
+    overlayStats.clear();
+    genericCache = null;
+  }
+
+  // ── Facebook video / source transition handling ──────────────────────────
+  // Facebook Watch and Reels reuse DOM and <video> elements across videos, so stale caption
+  // state from a previous video must be discarded the moment a new video or source appears.
+  let fbkBoundVideo = null;   // video element the Facebook load/emptied listeners are attached to
+  let fbkBoundSrc = '';       // currentSrc observed at the time the listeners were bound
+  let fbkLastTime = -1;       // previous main-video currentTime, used to detect loops/skips without src
+
+  function fbkCurrentSrc(v) {
+    try { return String(v && (v.currentSrc || v.src) || ''); } catch (e) { return ''; }
+  }
+
+  // Detects whether the bound Facebook video changed its source. Used both by the load/emptied
+  // events and by the polling interval, so one transition always leads to exactly one reset.
+  function fbkSourceChanged() {
+    if (!fbkBoundVideo || !videoEl || videoEl !== fbkBoundVideo) return false;
+    const cur = fbkCurrentSrc(videoEl);
+    return cur !== '' && cur !== fbkBoundSrc;
+  }
+
+  // Facebook <video>.src is often empty, so the source-based check above cannot detect that a
+  // video is starting over (Reels loop) or that a new video is being played. A sizeable step
+  // backwards in the main video's currentTime is the reliable "started again" signal in that case.
+  function fbkTimeRewound() {
+    if (!videoEl) return false;
+    let t;
+    try { t = videoEl.currentTime; } catch (e) { return false; }
+    if (typeof t !== 'number' || !isFinite(t)) return false;
+    if (fbkLastTime < 0) { fbkLastTime = t; return false; }
+    const rewound = t < fbkLastTime - 2;
+    fbkLastTime = t;
+    return rewound;
+  }
+
+  // A switch to another video within this window after a natural end (or loop restart) keeps the
+  // queued speech instead of cutting it; a switch outside the window is treated as a manual skip.
+  const END_CARRY_MS = 3500;
+  let fbkEndedAt = 0;
+
+  function fbkRecentEnd() {
+    return fbkEndedAt > 0 && (Date.now() - fbkEndedAt) < END_CARRY_MS;
+  }
+
+  // Marks the end of the current video and commits every buffered word, including a trailing
+  // fragment without punctuation, so the ending is read out rather than discarded.
+  function fbkMarkEnd() {
+    fbkEndedAt = Date.now();
+    if (pendingWords.length > 0) forceFlushPending();
+  }
+
+  // How long a naturally-ended video may keep reading its remaining committed items before the
+  // switch to the next video is processed (used outside Facebook).
+  const END_GRACE_MS = 4000;
+
+  function pendingSpeech() {
+    // Uncommitted buffered words are also pending speech: the voice can lag the on-screen text,
+    // so the ending must wait for those words to be flushed too, not just the speaking queue.
+    if (pendingWords.length > 0) return true;
+    return isSpeaking || isTtsSpeaking || cueQueue.length > 0;
+  }
+
+  // Returns true while a video that ended on its own still has queued speech to read out, so the
+  // transition to the next video is held back briefly instead of cutting the ending short.
+  function deferSwitchForEnd() {
+    if (!endedNaturally || !pendingSpeech()) {
+      endGraceUntil = 0;
+      return false;
+    }
+    const now = Date.now();
+    if (!endGraceUntil) endGraceUntil = now + END_GRACE_MS;
+    return now < endGraceUntil;
+  }
+
+  // Runs the full "switch to a new video" reset: releases every attached source, clears all
+  // accumulated state and discards any stale subtitle-file work for the previous video.
+  function fbkTransitionReset() {
+    const keepSpeech = fbkRecentEnd();
+    if (keepSpeech && pendingWords.length > 0) forceFlushPending();
+    detachSource();
+    resetState(keepSpeech);
+    if (!keepSpeech) bumpGeneration();
+    fileTimeOffset = 0; adWas = false; activationClicks = 0;
+    gotText = false; fallbackTried = false; hintStage = 0; sawText = false;
+    playedMs = 0; lastWatchAt = 0; lastDomRecheck = 0;
+    isSeeking = false;
+    endedNaturally = false; endGraceUntil = 0; fbkEndedAt = 0;
+    fbkLastTime = -1;
+    initAt = Date.now();
+    attachSubtitles();
+  }
+
+  // Event handler for Facebook's loadstart/emptied: a new source (or a cleared one) signals
+  // that the underlying video changed, so stale captions must be discarded.
+  function onFbkSourceEvent() {
+    if (!isFacebookHost() || stopped) return;
+    if (fbkSourceChanged()) {
+      fbkBoundSrc = fbkCurrentSrc(videoEl);
+      fbkTransitionReset();
+    }
+  }
+
+  // Rebinds the Facebook source listeners to the given video, remembering the source at bind
+  // time so only genuine source changes trigger a reset.
+  function bindFbkVideo(v) {
+    if (!isFacebookHost()) return;
+    if (fbkBoundVideo === v) return;
+    if (fbkBoundVideo) {
+      try { fbkBoundVideo.removeEventListener('loadstart', onFbkSourceEvent); } catch (e) {}
+      try { fbkBoundVideo.removeEventListener('emptied', onFbkSourceEvent); } catch (e) {}
+    }
+    fbkBoundVideo = v;
+    fbkLastTime = -1;
+    if (v) {
+      fbkBoundSrc = fbkCurrentSrc(v);
+      try { v.addEventListener('loadstart', onFbkSourceEvent); } catch (e) {}
+      try { v.addEventListener('emptied', onFbkSourceEvent); } catch (e) {}
+    }
+  }
+
+  function unbindFbkVideo() {
+    if (fbkBoundVideo) {
+      try { fbkBoundVideo.removeEventListener('loadstart', onFbkSourceEvent); } catch (e) {}
+      try { fbkBoundVideo.removeEventListener('emptied', onFbkSourceEvent); } catch (e) {}
+    }
+    fbkBoundVideo = null;
+    fbkBoundSrc = '';
+  }
+
+  // Facebook video selection: prefer a playing video that is at least partly inside the
+  // viewport, breaking ties by visible area and then by the existing size score.
+  function fbkInViewport(v) {
+    try {
+      const r = v.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 &&
+        r.right > 0 && r.bottom > 0 &&
+        r.left < (window.innerWidth || document.documentElement.clientWidth) &&
+        r.top < (window.innerHeight || document.documentElement.clientHeight);
+    } catch (e) { return false; }
+  }
+
+  function fbkVisibleArea(v) {
+    try {
+      const r = v.getBoundingClientRect();
+      const vw = window.innerWidth || document.documentElement.clientWidth;
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      const w = Math.min(r.right, vw) - Math.max(r.left, 0);
+      const h = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+      return (w > 0 && h > 0) ? w * h : 0;
+    } catch (e) { return 0; }
+  }
+
+  // A video counts as "active" when it is not paused and not ended. Reels players sometimes
+  // leave readyState below 2 while the timeline is already advancing, so the stricter
+  // readyState-based isPlaying() check is intentionally avoided here.
+  function fbkActive(v) {
+    try { return !!v && !v.paused && !v.ended; } catch (e) { return false; }
+  }
+
+  function fbkPick() {
+    const all = findAllMedia(document, false);
+    if (!all.length) return null;
+
+    // First pass: an actively playing, in-viewport video always beats a paused one of any size.
+    let best = null;
+    for (const v of all) {
+      if (!fbkActive(v) || !fbkInViewport(v)) continue;
+      if (!best) { best = v; continue; }
+      const a = fbkVisibleArea(v), b = fbkVisibleArea(best);
+      if (a !== b) { if (a > b) best = v; }
+      else if (videoScore(v) > videoScore(best)) best = v;
+    }
+    if (best) return best;
+
+    // Fallback: no video is currently playing, so pick any in-viewport video to attach to.
+    for (const v of all) {
+      if (!fbkInViewport(v)) continue;
+      if (!best) { best = v; continue; }
+      const a = fbkVisibleArea(v), b = fbkVisibleArea(best);
+      if (a !== b) { if (a > b) best = v; }
+      else if (videoScore(v) > videoScore(best)) best = v;
+    }
+    return best;
+  }
+
+  // ── Facebook DOM caption block detection ────────────────────────────────
+  // Captions are rendered as a single inline-styled block (translucent background, white text)
+  // holding one span per line, positioned inside the playing video. Classes are not stable, so
+  // the block is identified only by its computed style and geometry.
+  function fbkFindCaptions() {
+    if (!isFacebookHost()) return null;
+    let vr;
+    try {
+      const v = fbkPick() || videoEl;
+      if (!v) return null;
+      vr = v.getBoundingClientRect();
+    } catch (e) { return null; }
+    if (!vr || vr.width < 20 || vr.height < 20) return null;
+
+    let scope;
+    try { scope = getPlayerScope(videoEl) || getSearchRoot(videoEl) || document; } catch (e) { scope = document; }
+
+    const candidates = [];
+    const scan = (root) => {
+      for (const el of deepQueryAll(root, 'div')) {
+        try {
+          if (el === videoEl) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) continue;
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          if (cx < vr.left || cx > vr.right || cy < vr.top || cy > vr.bottom) continue;
+          if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkVisibilityCSS: true })) continue;
+          const cs = getComputedStyle(el);
+          const bg = (cs.backgroundColor || '').trim();
+          const m = bg.match(/rgba?\(([^)]*)\)/i);
+          if (!m) continue;
+          const nums = m[1].split(',').map(s => parseFloat(s));
+          const alpha = nums.length > 3 ? nums[3] : 1;
+          if (!(alpha >= 0 && alpha < 1)) continue;
+          if (!/(255,255,255|#fff)/i.test((cs.color || '').replace(/\s/g, ''))) continue;
+          const fs = parseFloat(cs.fontSize) || 0;
+          if (fs < 14 || fs > 22) continue;
+          if (!el.querySelector('span')) continue;
+          if (!/<br\s*\/?>/i.test(el.innerHTML)) continue;
+          candidates.push(el);
+        } catch (e) {}
+      }
+    };
+    scan(scope);
+    if (!candidates.length && scope !== document) scan(document);
+
+    let best = null, bestArea = Infinity;
+    for (const el of candidates) {
+      const r = el.getBoundingClientRect();
+      const a = r.width * r.height;
+      if (a < bestArea) { bestArea = a; best = el; }
+    }
+    return best;
+  }
+
+  function fbkReadCaptions(el) {
+    if (!el || !el.isConnected) return '';
+    try {
+      const spans = el.querySelectorAll('span');
+      const parts = [];
+      for (const s of spans) {
+        const t = norm(s.textContent);
+        if (t) parts.push(t);
+      }
+      if (parts.length) return norm(parts.join(' '));
+      return norm(el.textContent);
+    } catch (e) { return ''; }
+  }
+
+  // keepSpeech: leave the speech queue and the item being spoken untouched, so already committed
+  // text is still read out while the subtitle source is rebuilt.
+  function resetState(keepSpeech) {
     clearTimeout(debTimer); 
     clearTimeout(silenceTimer); 
-    clearTimeout(ttsId);
-    isSpeaking = false;
-    isTtsSpeaking = false;
+    if (!keepSpeech) {
+      clearTimeout(ttsId);
+      isSpeaking = false;
+      isTtsSpeaking = false;
+      cueQueue = [];
+      recentTrans = [];
+      ttsId = null;
+    }
     pendingWords = [];
+    pendingSince = 0;
     committedWords = [];
     lastSeenText = '';
-    cueQueue = [];
-    recentTrans = [];
     debTimer = null;
     silenceTimer = null;
-    ttsId = null;
     isTextTrackMode = false;
     isProgressiveMode = false;
     cfg.trackLang = '';
@@ -1288,8 +1651,15 @@ window.__subtitleTtsApi = (function () {
       const ytCc = document.querySelector('.ytp-subtitles-button');
       if (ytCc && ytCc.getAttribute('aria-pressed') === 'false' && activate(ytCc)) return;
 
-      const twitchCc = document.querySelector('[data-a-target="player-subtitles-button"]');
-      if (twitchCc && twitchCc.getAttribute('aria-checked') === 'false' && activate(twitchCc)) return;
+      // Some players expose no state attribute on the captions button, so the state is read from the icon:
+      // the "off" icon is drawn with two paths (glyph plus outline), the "on" icon is a single filled path.
+      if (window.location.hostname.includes('twitch.tv')) {
+        const ccBtn = Array.from(document.querySelectorAll('button[aria-label]')).find(b =>
+          /caption|subt[i\u00ed]tulo|sous-?titre|untertitel|sottotitol/i.test(b.getAttribute('aria-label')) &&
+          b.querySelector('svg') &&
+          (typeof b.checkVisibility !== 'function' || b.checkVisibility()));
+        if (ccBtn && ccBtn.querySelectorAll('svg path').length === 2 && activate(ccBtn)) return;
+      }
 
       // Bitmovin subtitle toggle — only until the first subtitle text has been received
       if (!gotText) {
@@ -1561,15 +1931,20 @@ window.__subtitleTtsApi = (function () {
 
   async function loadFileSource() {
     if (fileLoading || stopped) return;
+    if (isFacebookHost()) return;   // Facebook subtitles are read from the DOM, not external files
+    // Capture the generation so stale work from a previous video is discarded (Facebook only).
+    const startGen = gen;
     const urls = Array.from(fileCands.values()).filter(c => !fileTried.has(c.url)).sort((a, b) => b.t - a.t).slice(0, 4);
     if (!urls.length) return;
     fileLoading = true;
     const fresh = [];
     try {
       for (const c of urls) {
+        if (isFacebookHost() && gen !== startGen) return;
         fileTried.add(c.url);
         const parsed = parseSubtitleText(await fetchSubtitleText(c.url));
         if (stopped) return;
+        if (isFacebookHost() && gen !== startGen) return;
         if (parsed.cues.length) {
           const tr = { url: c.url, t: c.t, cues: parsed.cues, lang: parsed.lang };
           fileTracks.push(tr); fresh.push(tr);
@@ -1577,6 +1952,9 @@ window.__subtitleTtsApi = (function () {
       }
     } finally { fileLoading = false; }
     if (stopped || !fresh.length) return;
+    // Facebook-only: if the generation changed while fetching, do not attach or mutate
+    // fileTried/fileLoading/fileTracks belonging to the new generation.
+    if (isFacebookHost() && gen !== startGen) return;
     // Do not override a DOM/track source that is already delivering text.
     // If already using a file track, only switch when a newer file is discovered.
     if ((attachedKind === 'dom' || attachedKind === 'track' || attachedKind === 'generic') && gotText) return;
@@ -1626,7 +2004,12 @@ window.__subtitleTtsApi = (function () {
   //   → disabled text track (promoted to "hidden") → empty generic overlay
   function tryAttach(exclude) {
     let kind = '';
-    if (exclude !== 'dom') {
+    if (isFacebookHost()) {
+      // Facebook captions live in an inline-styled DOM block rather than media tracks or files.
+      const fb = fbkFindCaptions();
+      if (fb && startObs({ facebook: true, container: fb, root: null, c: null, t: null })) kind = 'facebook';
+    }
+    if (!kind && exclude !== 'dom') {
       const sel = findDom();
       if (sel && startObs(sel)) kind = 'dom';
     }
@@ -1667,8 +2050,17 @@ window.__subtitleTtsApi = (function () {
     } else if (obs) {
       // Use isConnected rather than document.body.contains to handle shadow DOM roots
       if (!observedNode || !observedNode.isConnected) {
+        // The caption block left the page (for example when a video ends): commit what is
+        // buffered and keep the queued speech so the ending is still read out.
+        // Some players remove and recreate the caption block between cues, so buffered words are
+        // committed, queued speech is kept, and the dedupe and language state survive the swap.
+        if (pendingWords.length > 0) forceFlushPending();
+        const keptWords = committedWords, keptLang = detectedLang, keptTrackLang = cfg.trackLang;
         detachSource();
-        resetState();
+        resetState(true);
+        committedWords = keptWords;
+        detectedLang = keptLang;
+        cfg.trackLang = keptTrackLang;
       }
     }
   }
@@ -1799,8 +2191,16 @@ window.__subtitleTtsApi = (function () {
     }
 
     if (!attachedKind) {
+      // Some players offer no caption control to turn on: when nothing is attached after a few
+      // seconds of playback, the video simply has no subtitles.
+      if (isFacebookHost() && hintStage < 2 && playedMs > 6000) {
+        hintStage = 2;
+        showContent(null, null, 'No subtitles available for this video', cfg.trackLang || '');
+        return;
+      }
       // Some players only expose their subtitle tracks once playback has started, so the
       // captions hint is shown only after the video has played for a while without any source.
+      if (sawText) return;
       if (hintStage < 1 && now - initAt > 3000) {
         hintStage = 1;
         showContent(null, null, 'Looking for subtitles\u2026', cfg.trackLang || '');
@@ -1811,7 +2211,7 @@ window.__subtitleTtsApi = (function () {
       return;
     }
 
-    if (attachedKind !== 'dom' && attachedKind !== 'file' && !gotText && !fallbackTried && playing && now - attachedAt > 6000) {
+    if (attachedKind !== 'dom' && attachedKind !== 'file' && attachedKind !== 'facebook' && !gotText && !fallbackTried && playing && now - attachedAt > 6000) {
       fallbackTried = true;
       const prev = attachedKind;
       detachSource();
@@ -1837,13 +2237,19 @@ window.__subtitleTtsApi = (function () {
 
     videoEl = findVideo();
     if (!videoEl) return { success: false, error: 'no_video' };
+    if (isFacebookHost()) {
+      const picked = fbkPick();
+      videoEl = picked || videoEl;
+    }
     initAt = Date.now();
-    hintStage = 0; playedMs = 0; lastWatchAt = 0; fileTimeOffset = 0; adWas = false; genericCache = null; activationClicks = 0; overlayStats.clear();
+    hintStage = 0; sawText = false; playedMs = 0; lastWatchAt = 0; fileTimeOffset = 0; adWas = false; genericCache = null; activationClicks = 0; overlayStats.clear();
     startResourceWatch();
 
     applyVideoVolume(true);
     ensureSubtitlesActive();
     videoEl.addEventListener('seeked', onSeeked);
+    videoEl.addEventListener('ended', onEnded);
+    bindFbkVideo(videoEl);
     updateHideNativeSubtitlesStyle();
 
     bgSearch = setInterval(() => {
@@ -1853,18 +2259,64 @@ window.__subtitleTtsApi = (function () {
         return; 
       }
       
-      const currentVideo = findVideo();
-      // Switch video target only if the current element disappears or a clearly larger one appears
-      const switchVideo = currentVideo && currentVideo !== videoEl &&
-        (!videoEl || !videoEl.isConnected || videoScore(currentVideo) > videoScore(videoEl) * 1.5);
+      let currentVideo;
+      let switchVideo = false;
+      if (isFacebookHost()) {
+        // Reuse the same DOM/video element across videos: switch as soon as a different
+        // playing, in-viewport video becomes the best candidate (no 1.5x size rule).
+        const picked = fbkPick();
+        currentVideo = picked || findVideo();
+        switchVideo = currentVideo && currentVideo !== videoEl &&
+          (!videoEl || !videoEl.isConnected || picked === currentVideo);
+
+        // The main video rewinding (Reels loop or a new video reusing the element) is the
+        // reliable signal when src is empty. It is treated as a natural end: buffered words are
+        // committed and the speech queue is kept, exactly like an ended event.
+        if (fbkTimeRewound() && !endedNaturally) {
+          endedNaturally = true;
+          endGraceUntil = 0;
+          fbkMarkEnd();
+        }
+
+        // A source change is caught here and again by the load/emptied handler; whichever runs
+        // first performs the reset.
+        if (fbkSourceChanged()) {
+          fbkBoundSrc = fbkCurrentSrc(videoEl);
+          fbkTransitionReset();
+          switchVideo = false;
+        } else if (endedNaturally && !switchVideo) {
+          // A loop restart on the same video: nothing is discarded, only the end flag is cleared.
+          endedNaturally = false;
+          endGraceUntil = 0;
+          isSeeking = false;
+        }
+      } else {
+        currentVideo = findVideo();
+        // Switch video target only if the current element disappears or a clearly larger one appears
+        switchVideo = currentVideo && currentVideo !== videoEl &&
+          (!videoEl || !videoEl.isConnected || videoScore(currentVideo) > videoScore(videoEl) * 1.5);
+      }
+
+      // A video that ended on its own is allowed to finish reading its pending speech before the
+      // switch proceeds; a manual skip (seek) keeps endedNaturally false and cuts immediately.
+      if (switchVideo && !isFacebookHost() && deferSwitchForEnd()) switchVideo = false;
+
       if (switchVideo) {
+        // A switch right after the previous video ended on its own keeps the queued speech so the
+        // ending is still read out; any other switch is treated as a skip and cuts it.
+        const keepSpeech = isFacebookHost() && fbkRecentEnd();
+        if (keepSpeech && pendingWords.length > 0) forceFlushPending();
         detachSource();
-        if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); }
+        if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); videoEl.removeEventListener('ended', onEnded); }
         videoEl = currentVideo;
-        if (videoEl) { videoEl.addEventListener('seeked', onSeeked); }
+        if (videoEl) { videoEl.addEventListener('seeked', onSeeked); videoEl.addEventListener('ended', onEnded); }
         applyVideoVolume(true);
-        resetState();
-        initAt = Date.now(); hintStage = 0; playedMs = 0; lastWatchAt = 0; fileTimeOffset = 0; adWas = false; genericCache = null; activationClicks = 0; overlayStats.clear();
+        resetState(keepSpeech);
+        if (isFacebookHost() && !keepSpeech) bumpGeneration();
+        bindFbkVideo(videoEl);
+        endedNaturally = false; endGraceUntil = 0; fbkEndedAt = 0;
+        fbkLastTime = -1;
+        initAt = Date.now(); hintStage = 0; sawText = false; playedMs = 0; lastWatchAt = 0; fileTimeOffset = 0; adWas = false; genericCache = null; activationClicks = 0; overlayStats.clear();
       } else {
         applyVideoVolume(false);
       }
@@ -1873,7 +2325,7 @@ window.__subtitleTtsApi = (function () {
       ensureSubtitlesActive();
       attachSubtitles();
       watchdog();
-    }, 1000);
+    }, isFacebookHost() ? 500 : 1000);
 
     return { success: true };
   }
@@ -1885,6 +2337,7 @@ window.__subtitleTtsApi = (function () {
     if (activeTrack) { activeTrack.removeEventListener('cuechange', onCueChange); activeTrack = null; }
     restoreTrackMode();
     if (videoEl) { videoEl.removeEventListener('seeked', onSeeked); videoEl = null; }
+    unbindFbkVideo();
     const s = document.getElementById('stts-hide-cc');
     if (s) s.remove();
     restoreInlineHide();

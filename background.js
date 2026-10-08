@@ -938,12 +938,53 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   );
 });
 
+// Single-page sites change the address without replacing the document. On those sites a
+// navigation keeps the running Subtitle TTS session as long as the page's script is still alive.
+const KEEP_ALIVE_HOST_RE = /^(?:[a-z0-9-]+\.)*(?:facebook\.com|fb\.watch)$/i;
+const subtitleNavPending = new Set();
+
+function isKeepAliveUrl(url) {
+  try { return KEEP_ALIVE_HOST_RE.test(new URL(url).hostname); } catch (e) { return false; }
+}
+
+function isSubtitleScriptAlive(tabId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.scripting.executeScript({ target: { tabId }, func: () => !!window.__subtitleTtsApi }, (results) => {
+        if (chrome.runtime.lastError || !Array.isArray(results) || !results[0]) { resolve(false); return; }
+        resolve(!!results[0].result);
+      });
+    } catch (e) { resolve(false); }
+  });
+}
+
+async function handleSubtitleTabNavigation(tabId, status) {
+  const stopIfActive = async () => {
+    const st = await getStorage(["isSubtitleTtsActive", "subtitleSourceTabId"]);
+    if (st.isSubtitleTtsActive && st.subtitleSourceTabId === tabId) await stopSubtitleTtsInternal();
+  };
+  if (status === "loading") {
+    const tab = await getTab(tabId);
+    if (!tab || !isKeepAliveUrl(tab.url)) { await stopIfActive(); return; }
+    subtitleNavPending.add(tabId);
+    await delay(1500);
+    if (!(await isSubtitleScriptAlive(tabId))) { subtitleNavPending.delete(tabId); await stopIfActive(); }
+    return;
+  }
+  // Load finished: stop the session if the document was replaced in the meantime.
+  if (subtitleNavPending.delete(tabId) && !(await isSubtitleScriptAlive(tabId))) await stopIfActive();
+}
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status !== "loading") return;
+  if (changeInfo.status !== "loading" && changeInfo.status !== "complete") return;
   chrome.storage.local.get(
     ["captureSourceTabId", "standaloneTabId", "capturingState", "subtitleSourceTabId", "isSubtitleTtsActive"],
     (result) => {
-      if (result?.isSubtitleTtsActive && tabId === result.subtitleSourceTabId) { stopSubtitleTtsInternal().catch(()=>{}); return; }
+      if (result?.isSubtitleTtsActive && tabId === result.subtitleSourceTabId) {
+        handleSubtitleTabNavigation(tabId, changeInfo.status).catch(()=>{});
+        return;
+      }
+      if (changeInfo.status !== "loading") return;
       if (!result?.capturingState?.isCapturing) return;
       if (result.standaloneTabId) return;
       if (tabId === result.captureSourceTabId) { try { chrome.tts.stop(); } catch (e) {} stopCapture(); }
