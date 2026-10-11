@@ -611,6 +611,7 @@ async function startSubtitleTtsInternal(tabId) {
   resetTranslationContext();
   subtitleTabId = tabId;
   setSubtitleTtsState(true);
+  getTab(tabId).then((t) => { if (t) subtitleLastUrl.set(tabId, t.url); }).catch(() => {});
 
   const settings = await getStorage(["targetLanguage", "ttsSpeed", "subtitlePlaybackControl", "subtitleSlowdownRate", "useStandalone", "hideNativeSubtitles", "subtitleVideoVolume", "enableTts", "enableGeminiTranslation", "sttsSelectedLanguage", "subtitleTtsProfile"]);
 
@@ -941,10 +942,25 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Single-page sites change the address without replacing the document. On those sites a
 // navigation keeps the running Subtitle TTS session as long as the page's script is still alive.
 const KEEP_ALIVE_HOST_RE = /^(?:[a-z0-9-]+\.)*(?:facebook\.com|fb\.watch)$/i;
+// Hosts where only the short-form feed section behaves as a single-page player.
+const KEEP_ALIVE_PATH_HOST_RE = /^(?:[a-z0-9-]+\.)*youtube\.com$/i;
 const subtitleNavPending = new Set();
 
-function isKeepAliveUrl(url) {
-  try { return KEEP_ALIVE_HOST_RE.test(new URL(url).hostname); } catch (e) { return false; }
+// Last address seen per tab, used to tell a move between clips from a move between sections.
+const subtitleLastUrl = new Map();
+const TIKTOK_HOST_RE = /^(?:[a-z0-9-]+\.)*tiktok\.com$/i;
+
+function isKeepAliveUrl(url, prevUrl) {
+  try {
+    const u = new URL(url);
+    if (TIKTOK_HOST_RE.test(u.hostname)) {
+      // Clip pages and reloads of the same page keep the session; another section ends it.
+      if (/\/(?:video|photo)\/|^\/shortdrama\/episode\//.test(u.pathname)) return true;
+      return !!prevUrl && new URL(prevUrl).pathname === u.pathname;
+    }
+    if (KEEP_ALIVE_HOST_RE.test(u.hostname)) return true;
+    return KEEP_ALIVE_PATH_HOST_RE.test(u.hostname) && /^\/shorts(?:\/|$)/.test(u.pathname);
+  } catch (e) { return false; }
 }
 
 function isSubtitleScriptAlive(tabId) {
@@ -965,7 +981,9 @@ async function handleSubtitleTabNavigation(tabId, status) {
   };
   if (status === "loading") {
     const tab = await getTab(tabId);
-    if (!tab || !isKeepAliveUrl(tab.url)) { await stopIfActive(); return; }
+    const prevUrl = subtitleLastUrl.get(tabId);
+    if (tab) subtitleLastUrl.set(tabId, tab.url);
+    if (!tab || !isKeepAliveUrl(tab.url, prevUrl)) { subtitleLastUrl.delete(tabId); await stopIfActive(); return; }
     subtitleNavPending.add(tabId);
     await delay(1500);
     if (!(await isSubtitleScriptAlive(tabId))) { subtitleNavPending.delete(tabId); await stopIfActive(); }
